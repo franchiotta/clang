@@ -184,9 +184,10 @@ endif()
 find_package(LibXml2 2.5.3 QUIET)
 if (LIBXML2_FOUND)
   set(CLANG_HAVE_LIBXML 1)
+  include_directories(SYSTEM ${LIBXML2_INCLUDE_DIR})
 endif()
 
-set(CLANG_RESOURCE_DIR "" CACHE STRING
+set(CLANG_RESOURCE_DIR ${CMAKE_CURRENT_BINARY_DIR}/resources CACHE STRING
   "Relative directory from the Clang binary to its resource files.")
 
 set(C_INCLUDE_DIRS "" CACHE STRING
