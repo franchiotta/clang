@@ -116,3 +116,7 @@ if(WITH_POLLY AND LINK_POLLY_INTO_TOOLS)
     endforeach(lib)
   endif(POLLY_LINK_LIBS)
 endif(WITH_POLLY AND LINK_POLLY_INTO_TOOLS)
+
+if (LIBXML2_FOUND)
+   target_link_libraries(clang ${LIBXML2_LIBRARIES})
+endif()

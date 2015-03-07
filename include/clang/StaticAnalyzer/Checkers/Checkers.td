@@ -360,6 +360,11 @@ def GenericTaintChecker : Checker<"TaintPropagation">,
   HelpText<"Generate taint information used by other checkers">,
   DescFile<"GenericTaintChecker.cpp">;
 
+def CustomTaintChecker : Checker<"CustomTaintPropagation">,
+  HelpText<"Generate taint information used by other checkers">,
+  DescFile<"CustomTaintChecker.cpp">;
+
+
 } // end "alpha.security.taint"
 
 //===----------------------------------------------------------------------===//

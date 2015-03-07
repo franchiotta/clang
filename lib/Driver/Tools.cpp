@@ -4047,6 +4047,8 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
       CmdArgs.push_back("-analyzer-checker=nullability.NullPassedToNonnull");
       CmdArgs.push_back(
           "-analyzer-checker=nullability.NullReturnedFromNonnull");
+      // Custom taint checker added as default.
+      CmdArgs.push_back("-analyzer-checker=alpha.security.taint.CustomTaintPropagation");
     }
 
     // Set the output format. The default is plist, for (lame) historical

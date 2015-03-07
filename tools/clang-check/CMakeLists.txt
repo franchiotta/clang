@@ -20,3 +20,7 @@ target_link_libraries(clang-check
 
 install(TARGETS clang-check
   RUNTIME DESTINATION bin)
+
+if (LIBXML2_FOUND)
+   target_link_libraries(clang-check ${LIBXML2_LIBRARIES})
+endif()
