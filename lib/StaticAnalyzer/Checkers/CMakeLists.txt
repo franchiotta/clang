@@ -36,6 +36,7 @@ add_clang_library(clangStaticAnalyzerCheckers
   ExprInspectionChecker.cpp
   FixedAddressChecker.cpp
   GenericTaintChecker.cpp
+  CustomTaintChecker.cpp
   IdenticalExprChecker.cpp
   IvarInvalidationChecker.cpp
   LLVMConventionsChecker.cpp
@@ -85,3 +86,10 @@ add_clang_library(clangStaticAnalyzerCheckers
   clangBasic
   clangStaticAnalyzerCore
   )
+
+
+add_custom_command(TARGET clangStaticAnalyzerCheckers
+                   COMMAND ${CMAKE_COMMAND} -E copy
+                   ${CMAKE_SOURCE_DIR}/tools/clang/resources/taint-rules.xsd
+                   ${CMAKE_BINARY_DIR}/tools/clang/resources/taint-rules.xsd
+                   )
