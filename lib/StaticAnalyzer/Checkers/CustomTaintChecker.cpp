@@ -77,7 +77,7 @@ public:
     propagationRuleMap = parser.getPropagationRuleMap();
     destinationMap = parser.getDestinationMap();
     filterMap = parser.getFilterMap();
-    parser.toString();
+    parser.printLog();
     #else
       debug("No LIBXML library found. Using default setting. \n");
     #endif
@@ -268,7 +268,7 @@ private:
     PROPAGATION getPropagationRuleMap();
     DESTINATION getDestinationMap();
     FILTER getFilterMap();
-    void toString();
+    void printLog();
 
   private:
     string XMLfilename; // Holds the xml configuration filename.
@@ -801,26 +801,33 @@ SymbolRef CustomTaintChecker::getPointedToSymbol(CheckerContext &C,
                                                   const Expr* Arg) {
   ProgramStateRef State = C.getState();
   SVal AddrVal = State->getSVal(Arg->IgnoreParens(), C.getLocationContext());
-  if(AddrVal.isUnknownOrUndef()){
-    debug((char*)"In getPointedToSymbol(..): AddrVal is uknown or undef\n");
+  if(AddrVal.isUnknownOrUndef())
     return nullptr;
-  }
 
   Optional<Loc> AddrLoc = AddrVal.getAs<Loc>();
-  if (!AddrLoc) {
-    debug((char*)"In getPointedToSymbol(..): AddrLoc is null\n");
+  if (!AddrLoc)
     return nullptr;
-  }
-
-  debug((char*)"In getPointedToSymbol(..): about to get the symbol.\n");
+    
   const PointerType *ArgTy =
     dyn_cast<PointerType>(Arg->getType().getCanonicalType().getTypePtr());
-  debug((char*)"In getPointedToSymbol(..): %s \n",ArgTy ? ArgTy->getPointeeType().getAsString().data(): "QuallType()");
   SVal Val = State->getSVal(*AddrLoc,
                             ArgTy ? ArgTy->getPointeeType(): QualType());
-    
   Val.dump();
-  return Val.getAsSymbol();
+    
+  SymbolRef symbol = Val.getAsSymbol();
+  if (symbol)
+    return symbol;
+  // If there is no symbol, and the Svals is a lazyCompoundVal. It tries to get the symbolic base, and then
+  // return its symbol.
+  else{
+    Optional<clang::ento::nonloc::LazyCompoundVal> lazyCompoundVal = Val.getAs<clang::ento::nonloc::LazyCompoundVal>();
+    if (lazyCompoundVal){
+      const SymbolicRegion* symbolicRegion = lazyCompoundVal->getRegion()->getSymbolicBase();
+      if (symbolicRegion)
+        return symbolicRegion->getSymbol();
+    }
+  }
+  return nullptr;
 }
 
 ProgramStateRef 
@@ -1167,7 +1174,6 @@ CustomTaintChecker::Parser::Parser::~Parser(){}
 bool CustomTaintChecker::Parser::process(){
   xmlDocPtr doc;
 
-  debug((char*)"In Parser: processing.\n");
   /* Load XML document */
   doc = xmlParseFile(this -> XMLfilename.data());
   if (doc == NULL) {
@@ -1217,8 +1223,9 @@ CustomTaintChecker::FILTER CustomTaintChecker::Parser::getFilterMap(){
   return filterMap;
 }
 
-void CustomTaintChecker::Parser::toString(){
-  debug((char*)"----- TO STRING ----- \n");
+// Just for testing purposes.
+void CustomTaintChecker::Parser::printLog(){
+  debug((char*)"----- PRINT TO LOG ----- \n");
   debug((char*)"Sources: \n");
   for (SOURCE::const_iterator
        I = sourceMap.begin(),
@@ -1282,7 +1289,7 @@ void CustomTaintChecker::Parser::toString(){
       debug((char*)"Arg %d \n", arg);
     }
   }
-  debug((char*)"----- END OF TO STRING ----- \n");
+  debug((char*)"----- END ----- \n");
 }
 
 bool CustomTaintChecker::Parser::executeXpathExpression(xmlDocPtr doc, const xmlChar* xpathExpr, ResultManager ResultManagerFunction){
@@ -1292,7 +1299,7 @@ bool CustomTaintChecker::Parser::executeXpathExpression(xmlDocPtr doc, const xml
   assert(doc);
   assert(xpathExpr);
 
-  /* Create xpath evaluation context */
+  // Create xpath evaluation context.
   xpathCtx = xmlXPathNewContext(doc);
   if(xpathCtx == NULL) {
     debug((char*)"Error: unable to create new XPath context\n");
@@ -1300,7 +1307,7 @@ bool CustomTaintChecker::Parser::executeXpathExpression(xmlDocPtr doc, const xml
     return false;
   }
 
-  /* Evaluate xpath expression */
+  // Evaluate xpath expression.
   xpathObj = xmlXPathEvalExpression(xpathExpr, xpathCtx);
   if(xpathObj == NULL) {
     debug((char*)"Error: unable to evaluate xpath expression << xpathExpr \n");
@@ -1322,22 +1329,17 @@ void CustomTaintChecker::Parser::parseSources(xmlNodeSetPtr nodes){
   int size;
 
   size = (nodes) ? nodes->nodeNr : 0;
-
-  debug((char*)"Result (%d nodes):\n", size);
   for(int i = 0; i < size; ++i) {
     assert(nodes->nodeTab[i]);
 
     if(nodes->nodeTab[i]->type == XML_ELEMENT_NODE) {
       cur = nodes->nodeTab[i];
-      debug((char*)"= element node %s \n", cur->name);
-
       string generateMethod;
       SmallVector<int, SIZE_ARGS> generateArgs;
 
       xmlNodePtr node = cur -> children;
       while (node != cur -> last) {
         if (xmlStrEqual(node -> name, xmlCharStrdup("method"))){
-          debug((char*)"Method name %s \n", node -> children -> content);
           generateMethod = string(reinterpret_cast<char*>(node -> children -> content));
         }
         if (xmlStrEqual(node -> name, xmlCharStrdup("params"))){
@@ -1345,7 +1347,6 @@ void CustomTaintChecker::Parser::parseSources(xmlNodeSetPtr nodes){
           xmlNodePtr paramsNodes = node -> children;
           while(paramsNodes != node -> last){
             if (xmlStrEqual(paramsNodes -> name, xmlCharStrdup("value"))){
-              debug((char*)"Param %s \n", paramsNodes -> children -> content);
               generateArgs.push_back(stoi(reinterpret_cast<char*>(paramsNodes -> children -> content)));
             }
             paramsNodes = paramsNodes -> next;
@@ -1356,7 +1357,6 @@ void CustomTaintChecker::Parser::parseSources(xmlNodeSetPtr nodes){
       sourceMap.push_back(pair<string, SmallVector<int, SIZE_ARGS>>(generateMethod, generateArgs));
     } else {
       cur = nodes->nodeTab[i];
-      debug((char*)"= node %s : type %d \n", cur->name, cur->type);
     }
   }
 }
@@ -1366,22 +1366,17 @@ void CustomTaintChecker::Parser::parsePropagationRules(xmlNodeSetPtr nodes){
   int size;
 
   size = (nodes) ? nodes->nodeNr : 0;
-
-  debug((char*)"Result (%d nodes):\n", size);
   for(int i = 0; i < size; ++i) {
     assert(nodes->nodeTab[i]);
 
     if(nodes->nodeTab[i]->type == XML_ELEMENT_NODE) {
       cur = nodes->nodeTab[i];
-      debug((char*)"= element node %s \n", cur->name);
-
       string propagateMethod;
       TaintPropagationRule pr = TaintPropagationRule();
 
       xmlNodePtr node = cur -> children;
       while (node != cur -> last) {
         if (xmlStrEqual(node -> name, xmlCharStrdup("method"))){
-          debug((char*)"Method name %s \n", node -> children -> content);
           propagateMethod = string(reinterpret_cast<char*>(node->children->content));
         }
         if (xmlStrEqual(node -> name, xmlCharStrdup("sources"))){
@@ -1389,18 +1384,15 @@ void CustomTaintChecker::Parser::parsePropagationRules(xmlNodeSetPtr nodes){
           xmlNodePtr paramsNodes = node -> children;
           while(paramsNodes != node -> last){
             if (xmlStrEqual(paramsNodes -> name, xmlCharStrdup("value"))){
-              debug((char*)"Param %s \n", paramsNodes -> children -> content);
               pr.addSrcArg(stoi(reinterpret_cast<char*>(paramsNodes -> children -> content)));
             }
             paramsNodes = paramsNodes -> next;
           }
         }
         if (xmlStrEqual(node -> name, xmlCharStrdup("destinations"))){
-          debug((char*)"Destinations = \n");
           xmlNodePtr paramsNodes = node -> children;
           while(paramsNodes != node -> last){
             if (xmlStrEqual(paramsNodes -> name, xmlCharStrdup("value"))){
-              debug((char*)"Param %s \n", paramsNodes -> children -> content);
               pr.addDstArg(stoi(reinterpret_cast<char*>(paramsNodes -> children -> content)));
             }
             paramsNodes = paramsNodes -> next;
@@ -1411,7 +1403,6 @@ void CustomTaintChecker::Parser::parsePropagationRules(xmlNodeSetPtr nodes){
       propagationRuleMap.push_back(pair<string,TaintPropagationRule>(propagateMethod, pr));
     } else {
       cur = nodes->nodeTab[i];
-      debug((char*)"= node %s : type %d \n", cur->name, cur->type);
     }
   }
 }
@@ -1421,22 +1412,17 @@ void CustomTaintChecker::Parser::parseDestinations(xmlNodeSetPtr nodes){
   int size;
 
   size = (nodes) ? nodes->nodeNr : 0;
-
-  debug((char*)"Result (%d nodes):\n", size);
   for(int i = 0; i < size; ++i) {
     assert(nodes->nodeTab[i]);
 
     if(nodes->nodeTab[i]->type == XML_ELEMENT_NODE) {
       cur = nodes->nodeTab[i];
-      debug((char*)"= element node %s \n", cur->name);
-
       string destinationMethod;
       SmallVector<int,SIZE_ARGS> destinationArgs;
 
       xmlNodePtr node = cur -> children;
       while (node != cur -> last) {
         if (xmlStrEqual(node -> name, xmlCharStrdup("method"))){
-          debug((char*)"Method name %s \n", node -> children -> content);
           destinationMethod = string(reinterpret_cast<char*>(node -> children -> content));
         }
         if (xmlStrEqual(node -> name, xmlCharStrdup("params"))){
@@ -1444,7 +1430,6 @@ void CustomTaintChecker::Parser::parseDestinations(xmlNodeSetPtr nodes){
           xmlNodePtr paramsNodes = node -> children;
           while(paramsNodes != node -> last){
             if (xmlStrEqual(paramsNodes -> name, xmlCharStrdup("value"))){
-              debug((char*)"Param %s \n", paramsNodes -> children -> content);
               destinationArgs.push_back(stoi(reinterpret_cast<char*>(paramsNodes -> children -> content)));
             }
             paramsNodes = paramsNodes -> next;
@@ -1455,7 +1440,6 @@ void CustomTaintChecker::Parser::parseDestinations(xmlNodeSetPtr nodes){
       destinationMap.push_back(pair<string,SmallVector<int,SIZE_ARGS>>(destinationMethod,destinationArgs));
     } else {
       cur = nodes->nodeTab[i];
-      debug((char*)"= node %s : type %d \n", cur->name, cur->type);
     }
   }
 }
@@ -1465,29 +1449,23 @@ void CustomTaintChecker::Parser::parseFilters(xmlNodeSetPtr nodes){
   int size;
 
   size = (nodes) ? nodes->nodeNr : 0;
-
-  debug((char*)"Result (%d nodes):\n", size);
   for(int i = 0; i < size; ++i) {
     assert(nodes->nodeTab[i]);
-
+      
     if(nodes->nodeTab[i]->type == XML_ELEMENT_NODE) {
       cur = nodes->nodeTab[i];
-      debug((char*)"= element node %s \n", cur->name);
-
       string filterMethod;
       SmallVector<int, SIZE_ARGS> filterArgs;
 
       xmlNodePtr node = cur -> children;
       while (node != cur -> last) {
         if (xmlStrEqual(node -> name, xmlCharStrdup("method"))){
-          debug((char*)"Method name %s \n", node -> children -> content);
           filterMethod = string(reinterpret_cast<char*>(node -> children -> content));
         }
         if (xmlStrEqual(node -> name, xmlCharStrdup("params"))){
           xmlNodePtr paramsNodes = node -> children;
           while(paramsNodes != node -> last){
             if (xmlStrEqual(paramsNodes -> name, xmlCharStrdup("value"))){
-              debug((char*)"Param %s \n", paramsNodes -> children -> content);
               filterArgs.push_back(stoi(reinterpret_cast<char*>(paramsNodes -> children -> content)));
             }
             paramsNodes = paramsNodes -> next;
@@ -1498,7 +1476,6 @@ void CustomTaintChecker::Parser::parseFilters(xmlNodeSetPtr nodes){
       filterMap.push_back(pair<string,SmallVector<int,SIZE_ARGS>>(filterMethod, filterArgs));
     } else {
       cur = nodes->nodeTab[i];
-      debug((char*)"= node %s : type %d \n", cur->name, cur->type);
     }
   }
 }
