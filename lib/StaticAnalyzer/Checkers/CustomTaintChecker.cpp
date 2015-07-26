@@ -19,6 +19,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "includes/TaintParser.h"
+#include "includes/TaintVisitor.h"
 
 #include "clang/AST/Attr.h"
 #include "ClangSACheckers.h"
@@ -294,40 +295,30 @@ private:
                                                                     PROPAGATION;
   typedef TaintParser::DESTINATION DESTINATION;
   typedef TaintParser::FILTER FILTER;
-                                              
-                                              
+
+
   // Structures to store information retrieved from xml configuration file.
   SOURCE SourceMap;
   PROPAGATION PropagationRuleMap;
   DESTINATION DestinationMap;
   FILTER FilterMap;
-                                                
+
   /// Get the propagation rule for a given function.
   TaintPropagationRule getTaintPropagationRule(const FunctionDecl *FDecl,
                                                 StringRef Name,
                                                 CheckerContext &C) const; 
 
-  class WalkAST : public StmtVisitor<WalkAST> {
-  private:
-    CheckerContext C;
-    ProgramStateRef State;
-  public:
-    WalkAST(CheckerContext &C, ProgramStateRef State): C(C), State(State){};
-    //void VisitStmt(Stmt* stmt);
-    void VisitDeclStmt(DeclStmt* DeclStmt);
-    void VisitCallExpr(CallExpr *CE);
-    void VisitCXXMemberCallExpr(CallExpr *CE);
-    void VisitBinAssign(BinaryOperator *BO);
-    void Execute(Stmt *S);
-  private:
-    void MarkTaint(Expr* Stmt);
-    // True if the expression refers to a member variable, e.i. a struct/class
-    // variable.
-    bool IsMemberExpr(Expr* expr);
-    // True if the expression refers to a variable with global storage.
-    bool HasGlobalStorage(Expr* expr);
+  class WalkAST : public TaintVisitor {
+    public:
+      WalkAST(CheckerContext &C, ProgramStateRef State) : TaintVisitor(C, State){}
+    private:
+      void MarkTaint(Expr* Expr){
+        SymbolRef symbol = getPointedToSymbol(C, Expr);
+        if (symbol)
+          State->addTaint(symbol);
+      }
   };
-
+                                              
 template<typename... Args>
 static void debug(const char* format, Args ... args);
                                                
@@ -1180,113 +1171,6 @@ bool CustomTaintChecker::checkTaintedBufferSize(const CallExpr *CE,
       generateReportIfTainted(CE->getArg(ArgNum), MsgTaintedBufferSize, C))
     return true;
 
-  return false;
-}
-
-// ---------------------------- //
-//    WalkAST implementation    //
-// ---------------------------- //
-
-void
-CustomTaintChecker::WalkAST::Execute(Stmt* Stmt){
-  for (Stmt::child_iterator I = Stmt->child_begin(), E = Stmt->child_end();
-         I!=E; ++I){
-    if (*I){
-      Visit(*I);
-    }
-  }
-}
-
-void
-CustomTaintChecker::WalkAST::VisitDeclStmt(DeclStmt* declStmt){
-  // Not sure if we have to manage this.
-}
-
-//
-// Check if a member variable was passed to the call. If that is the case,
-// mark it as tainted.
-//
-void
-CustomTaintChecker::WalkAST::VisitCallExpr(CallExpr *CE){
-  for (unsigned int i = 0; i < CE->getNumArgs(); ++i) {
-    Expr *arg = CE->getArg(i);
-    if (CastExpr *castExpr = dyn_cast<CastExpr>(arg)){
-      arg = castExpr->getSubExprAsWritten();
-    }
-    if (IsMemberExpr(arg))
-      // The arg is a member expression, it has to be marked as tainted.
-      MarkTaint(arg);
-  }
-}
-
-//
-// The same as VisitCallExpr, but it goes further. Since is a member call, we
-// continue visiting the invoked method.
-//
-void
-CustomTaintChecker::WalkAST::VisitCXXMemberCallExpr(CallExpr *CE){
-  for (unsigned int i = 0; i < CE->getNumArgs(); ++i) {
-    Expr *arg = CE->getArg(i);
-    if (CastExpr *castExpr = dyn_cast<CastExpr>(arg)){
-      arg = castExpr->getSubExprAsWritten();
-    }
-    if (IsMemberExpr(arg))
-      // The arg is a member expression, it has to be marked as tainted.
-      MarkTaint(arg);
-  }
-  Visit(CE->getDirectCallee()->getBody());
-}
-
-//
-// If an assignment is found, get the left hand side part(lhs) and check if it
-//is a member expression. If it is, mark as tainted.
-//
-void
-CustomTaintChecker::WalkAST::VisitBinAssign(BinaryOperator *BO){
-  if (BO->isAssignmentOp()){
-    // We get the left hand part of the assignment.
-    Expr *lhs = BO->getLHS();
-    if (IsMemberExpr(lhs) || HasGlobalStorage(lhs))
-      MarkTaint(lhs);
-  }
-}
-
-// Private methods.
-
-//
-// Tries to get the symbol associated with the symbolic expression, and mark it
-// as tainted.
-//
-void
-CustomTaintChecker::WalkAST::MarkTaint(Expr* Expr){
-  SymbolRef symbol = getPointedToSymbol(C, Expr);
-  if (symbol)
-    State->addTaint(symbol);
-}
-
-//
-// Indicates if the expression refers to a variable that has global storage.
-//
-bool
-CustomTaintChecker::WalkAST::HasGlobalStorage(Expr* expr){
-  if (DeclRefExpr *declRefExpr = dyn_cast<DeclRefExpr>(expr)){
-    NamedDecl *namedDecl = declRefExpr->getFoundDecl();
-    if(VarDecl *varDecl = dyn_cast<VarDecl>(namedDecl)){
-      if (varDecl->hasGlobalStorage())
-        return true;
-    }
-  }
-  return false;
-}
-
-//
-// Indicates if the expression referes to a member variable.
-//
-bool
-CustomTaintChecker::WalkAST::IsMemberExpr(Expr* Expr){
-  // See if we have to consider something else.
-  if (isa<MemberExpr>(Expr))
-    return true;
   return false;
 }
 
