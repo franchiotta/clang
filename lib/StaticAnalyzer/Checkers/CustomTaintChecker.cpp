@@ -18,6 +18,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "includes/TaintParser.h"
 
 #include "clang/AST/Attr.h"
 #include "ClangSACheckers.h"
@@ -46,33 +47,33 @@
 using namespace clang;
 using namespace ento;
 using namespace std;
-
+using namespace taintutil;
 namespace {
 
 // File used to write debug information(its path is passed by parameter to the
 // checker).
-static FILE* debugFile;
+static FILE* DebugFile;
+
 // Location of configuration schema used to validate the configuration file
 // entered by the user.
-static const string configSchema = string
+static const string ConfigSchema = string
   (CLANG_RESOURCE_DIR+(string)"/taint-rules.xsd");
 
 class CustomTaintChecker : public Checker< check::PostStmt<CallExpr>,
                                             check::PreStmt<CallExpr> > {
-
 public:
   CustomTaintChecker() {
-    sourceMap = SOURCE();
-    propagationRuleMap = PROPAGATION();
-    destinationMap = DESTINATION();
-    filterMap = FILTER();
+    SourceMap = SOURCE();
+    PropagationRuleMap = PROPAGATION();
+    DestinationMap = DESTINATION();
+    FilterMap = FILTER();
   }
 
   ~CustomTaintChecker() {
-    fclose(debugFile);
+    fclose(DebugFile);
   }
 
-  void initialization(string configurationFilePath, string debugFilePath) {
+  void initialization(string ConfigurationFilePath, string DebugFilePath) {
     
     // Displaying welcome screen.
     llvm::outs().changeColor(llvm::outs().SAVEDCOLOR, true, false);
@@ -80,21 +81,42 @@ public:
     llvm::outs() << "### Custom Taint Checker ###" << "\n";
     llvm::outs() << "############################" << "\n";
     
-    llvm::outs() << "Configuration file: " << configurationFilePath.data();
+    llvm::outs() << "Configuration file: " << ConfigurationFilePath.data();
     llvm::outs() << "\n";
-    llvm::outs() << "Debug file: " << debugFilePath.data() << "\n";
+    llvm::outs() << "Debug file: " << DebugFilePath.data() << "\n";
     llvm::outs() << "\n";
     llvm::outs().changeColor(llvm::outs().SAVEDCOLOR, false, false);
 
-    debugFile = fopen(debugFilePath.data(), "a");
+    DebugFile = fopen(DebugFilePath.data(), "a");
     debug("\n------Starting checker------\n");
 
     // Instance Parser class.
     #if defined CLANG_HAVE_LIBXML
-    Parser parser = Parser(configurationFilePath, configSchema);
+    TaintParser parser = TaintParser(ConfigurationFilePath, ConfigSchema);
     
     int result;
-    if ((result = parser.process())!=0){
+    if ((result = parser.process())==0){
+      // Getting taint configuration data from TaintParser object.
+      SourceMap = parser.getSourceMap();
+      
+      TaintParser::PROPAGATION propagationRule = parser.getPropagationRuleMap();
+      for (TaintParser::PROPAGATION::const_iterator
+           I = propagationRule.begin(),
+           E = propagationRule.end(); I != E; ++I) {
+        std::pair<std::string, TaintParser::PropagationRule> pair = *I;
+        
+        TaintPropagationRule taintPropagationRule = TaintPropagationRule();
+        taintPropagationRule.setSrcArg(pair.second.SrcArgs);
+        taintPropagationRule.setDstArg(pair.second.DstArgs);
+        PropagationRuleMap.push_back(NAMEPROPAGATIONPAIR(pair.first,
+                                                         taintPropagationRule));
+      }
+      
+      DestinationMap = parser.getDestinationMap();
+      FilterMap = parser.getFilterMap();
+      debug(parser.toString().data());
+    }
+    else {
       // An error occurred trying to parse configuration file.
       switch (result){
         case parser.Errors::ValidationError:
@@ -109,13 +131,6 @@ public:
       llvm::outs() <<
         "Loading just default configuration.\n\n";
     }
-    
-    
-    sourceMap = parser.getSourceMap();
-    propagationRuleMap = parser.getPropagationRuleMap();
-    destinationMap = parser.getDestinationMap();
-    filterMap = parser.getFilterMap();
-    debug(parser.toString().data());
     #else
       debug("No LIBXML library found. Using default setting. \n");
     #endif
@@ -246,6 +261,9 @@ private:
         DstArgs.push_back(ReturnValueIndex);
     }
 
+    void setSrcArg(ArgVector SrcArgs){ this->SrcArgs = SrcArgs; }
+    void setDstArg(ArgVector DstArgs){ this->DstArgs = DstArgs; }
+    
     inline void addSrcArg(unsigned A) { SrcArgs.push_back(A); }
     inline void addDstArg(unsigned A)  { DstArgs.push_back(A); }
 
@@ -270,78 +288,24 @@ private:
 
   };
 
-  static const int SIZE_METHODS = 5;
-  static const int SIZE_ARGS = 2;
-
-  typedef SmallVector<std::pair<string, SmallVector<int, SIZE_ARGS>>,
-                                              SIZE_METHODS> SOURCE;
-  typedef SmallVector<std::pair<string,TaintPropagationRule>, SIZE_METHODS>
-                                              PROPAGATION;
-  typedef SmallVector<std::pair<string,SmallVector<int, SIZE_ARGS>>,
-                                              SIZE_METHODS> DESTINATION;
-  typedef SmallVector<std::pair<string,SmallVector<int, SIZE_ARGS>>,
-                                              SIZE_METHODS> FILTER;
-  
-                                                
+  typedef TaintParser::SOURCE SOURCE;
+  typedef std::pair<string,TaintPropagationRule> NAMEPROPAGATIONPAIR;
+  typedef SmallVector<NAMEPROPAGATIONPAIR, TaintParser::SIZE_METHODS>
+                                                                    PROPAGATION;
+  typedef TaintParser::DESTINATION DESTINATION;
+  typedef TaintParser::FILTER FILTER;
+                                              
+                                              
   // Structures to store information retrieved from xml configuration file.
-  SOURCE sourceMap;
-  PROPAGATION propagationRuleMap;
-  DESTINATION destinationMap;
-  FILTER filterMap;
+  SOURCE SourceMap;
+  PROPAGATION PropagationRuleMap;
+  DESTINATION DestinationMap;
+  FILTER FilterMap;
                                                 
   /// Get the propagation rule for a given function.
   TaintPropagationRule getTaintPropagationRule(const FunctionDecl *FDecl,
                                                 StringRef Name,
-                                                CheckerContext &C) const;
-                                                
-  #if defined CLANG_HAVE_LIBXML
-  /// \brief Parser class to retrieve information for sources, propagations
-  ///rules, destinations, and filters from a specification xml file.
-  /// For this configuration functionality, it is necessary that clang project
-  /// has libxml2 enabled.
-  struct Parser {
-
-  public:
-    Parser(string XMLfilename, string XSDfilename);
-    ~Parser();
-    short process();
-    SOURCE getSourceMap();
-    PROPAGATION getPropagationRuleMap();
-    DESTINATION getDestinationMap();
-    FILTER getFilterMap();
-    string toString();
-
-    enum Errors {
-      ValidationError=-2,
-      GeneralError=-1
-    };
-    
-  private:
-    string XMLfilename; // Holds the xml configuration filename.
-    string XSDfilename; // Holds the schema filename.
-                                                    
-    SOURCE sourceMap;
-    PROPAGATION propagationRuleMap;
-    DESTINATION destinationMap;
-    FILTER filterMap;
-      
-    typedef void (Parser::*ResultManager)(xmlNodeSetPtr nodes);
-      
-    /// Executes xpath expression on the xml file, and manage the results using
-    /// the given function by parameter.
-    bool executeXpathExpression(xmlDocPtr doc, const xmlChar* xpathExpr,
-                                  ResultManager resultManagerFunction);
-
-    /// Result manager functions.
-    void parseSources(xmlNodeSetPtr nodes);
-    void parsePropagationRules(xmlNodeSetPtr nodes);
-    void parseDestinations(xmlNodeSetPtr nodes);
-    void parseFilters(xmlNodeSetPtr nodes);
-
-    /// Validates the doc against a schema.
-    bool validateXMLAgaintSchema(xmlDocPtr doc);
-  };
-  #endif
+                                                CheckerContext &C) const; 
 
   class WalkAST : public StmtVisitor<WalkAST> {
   private:
@@ -439,8 +403,8 @@ CustomTaintChecker::getTaintPropagationRule( const FunctionDecl *FDecl,
   // has to check the custom rules defined by the user.
   if (Rule.isNull()) {
     for (PROPAGATION::const_iterator
-         I = propagationRuleMap.begin(),
-         E = propagationRuleMap.end(); I != E; ++I) {
+         I = PropagationRuleMap.begin(),
+         E = PropagationRuleMap.end(); I != E; ++I) {
       std::pair<StringRef,TaintPropagationRule> pair = *I;
       debug("Inside loop. Checking %s\n", pair.first.data());
       if (pair.first.equals(Name)){
@@ -537,13 +501,13 @@ void CustomTaintChecker::checkGenerators(const CallExpr *CE,
   if (Name.empty())
     return;
   debug("In checkGenerators: for method %s\n", Name.data());
-  for (SOURCE::const_iterator I = sourceMap.begin(), E = sourceMap.end();
+  for (SOURCE::const_iterator I = SourceMap.begin(), E = SourceMap.end();
          I != E; ++I) {
-    std::pair<StringRef, SmallVector<int, SIZE_ARGS>> pair  = *I;
+    std::pair<StringRef, SmallVector<int, TaintParser::SIZE_ARGS>> pair  = *I;
     debug("In checkGenerators: Checking gen method %s\n", pair.first.data());
     if (Name.equals(pair.first)){
       debug("Generator found. Args size %zu \n", pair.second.size());
-      for (llvm::SmallVector<int, SIZE_ARGS>::const_iterator
+      for (llvm::SmallVector<int, TaintParser::SIZE_ARGS>::const_iterator
              J = pair.second.begin(), Z = pair.second.end(); J != Z; ++J) {
 
         unsigned ArgNum = *J;
@@ -599,13 +563,13 @@ void CustomTaintChecker::checkFilters(const CallExpr *CE, CheckerContext &C)
   if (Name.empty())
     return;
 
-  for (FILTER::const_iterator I = filterMap.begin(), E = filterMap.end();
+  for (FILTER::const_iterator I = FilterMap.begin(), E = FilterMap.end();
          I != E; ++I) {
-    std::pair<StringRef, SmallVector<int, SIZE_ARGS>> pair  = *I;
+    std::pair<StringRef, SmallVector<int, TaintParser::SIZE_ARGS>> pair  = *I;
     debug("In checkFilters: Checking filter method %s\n", pair.first.data());
     if (Name.equals(pair.first)){
       debug("Filter found. Args size %zu \n", pair.second.size());
-      for (llvm::SmallVector<int, SIZE_ARGS>::const_iterator
+      for (llvm::SmallVector<int, TaintParser::SIZE_ARGS>::const_iterator
              J = pair.second.begin(), Z = pair.second.end(); J != Z; ++J) {
                 
         unsigned ArgNum = *J;
@@ -1129,14 +1093,14 @@ bool CustomTaintChecker::checkCustomDestination(const CallExpr *CE,
                                                 CheckerContext &C) const {
   
   debug("In checkCustomDestination: for CE name %s\n",Name.data());
-  for (DESTINATION::const_iterator I = destinationMap.begin(),
-       E = destinationMap.end(); I != E; ++I) {
-    std::pair<StringRef,SmallVector<int,SIZE_ARGS>> pair = *I;
+  for (DESTINATION::const_iterator I = DestinationMap.begin(),
+       E = DestinationMap.end(); I != E; ++I) {
+    std::pair<StringRef,SmallVector<int,TaintParser::SIZE_ARGS>> pair = *I;
     debug("In checkCustomDestination: Checking %s\n",pair.first.data());
     if (pair.first.equals(Name)){
       debug("In checkCustomDestination: destination Rule found for method %s\n",
               Name.data());
-      for (SmallVector<int,SIZE_ARGS>::const_iterator I = pair.second.begin(),
+      for (SmallVector<int,TaintParser::SIZE_ARGS>::const_iterator I = pair.second.begin(),
            E = pair.second.end(); I != E; ++I) {
         int ArgNum = *I;
         debug("In checkCustomDestination: checking arg %d\n", ArgNum);
@@ -1218,383 +1182,6 @@ bool CustomTaintChecker::checkTaintedBufferSize(const CallExpr *CE,
 
   return false;
 }
-
-// ----------------------------- //
-//     Parser implementation     //
-// ----------------------------- //
-
-
-#if defined CLANG_HAVE_LIBXML
-CustomTaintChecker::Parser::Parser(string XMLfilename, string XSDfilename){
-  this -> XMLfilename = XMLfilename;
-  this -> XSDfilename = XSDfilename;
-  this -> sourceMap =
-    SmallVector<pair<string, SmallVector<int, SIZE_ARGS>>, SIZE_METHODS>();
-  this -> propagationRuleMap = CustomTaintChecker::PROPAGATION();
-  this -> destinationMap = CustomTaintChecker::DESTINATION();
-  this -> filterMap = CustomTaintChecker::FILTER();
-}
-CustomTaintChecker::Parser::Parser::~Parser(){}
-
-short CustomTaintChecker::Parser::process(){
-  xmlDocPtr doc;
-
-  /* Load XML document */
-  doc = xmlParseFile(this -> XMLfilename.data());
-  if (doc == NULL) {
-    debug("Error: unable to parse file %s \n", this -> XMLfilename.data());
-    return false;
-  }
-
-  if (!validateXMLAgaintSchema(doc))
-    return -2;
-
-  /* Init libxml */
-  xmlInitParser();
-  LIBXML_TEST_VERSION
-
-  /* Do the main job */
-  if(!executeXpathExpression(doc, BAD_CAST
-       "/TaintChecker/TaintSources/TaintSource", &Parser::parseSources))
-    return(-1);
-
-  if(!executeXpathExpression(doc, BAD_CAST
-       "/TaintChecker/PropagationRules/PropagationRule",
-       &Parser::parsePropagationRules))
-    return(-1);
-
-  if(!executeXpathExpression(doc, BAD_CAST
-       "/TaintChecker/TaintDestinations/TaintDestination",
-       &Parser::parseDestinations))
-    return(-1);
-
-  if(!executeXpathExpression(doc, BAD_CAST
-       "/TaintChecker/TaintFilters/TaintFilter", &Parser::parseFilters))
-    return(-1);
-
-  // Cleanup
-  xmlCleanupParser();
-  xmlFreeDoc(doc);
-  return 0;
-}
-
-CustomTaintChecker::SOURCE CustomTaintChecker::Parser::getSourceMap(){
-  return sourceMap;
-}
-
-CustomTaintChecker::PROPAGATION CustomTaintChecker::Parser::
-                                                        getPropagationRuleMap(){
-  return propagationRuleMap;
-}
-               
-CustomTaintChecker::DESTINATION CustomTaintChecker::Parser::getDestinationMap(){
-  return destinationMap;
-}
-
-CustomTaintChecker::FILTER CustomTaintChecker::Parser::getFilterMap(){
-  return filterMap;
-}
-
-// Just for testing purposes.
-string CustomTaintChecker::Parser::toString(){
-  string str = "Paser {\n";
-  str = str + "Sources :\n";
-  for (SOURCE::const_iterator
-       I = sourceMap.begin(),
-       E = sourceMap.end(); I != E; ++I) {
-    std::pair<StringRef, SmallVector<int, SIZE_ARGS>> pair = *I;
-    str = str + " - Name: "+ pair.first.data() + "\n";
-    for (SmallVector<int, SIZE_ARGS>::const_iterator
-         J = pair.second.begin(),
-         Y = pair.second.end(); J != Y; ++J) {
-      int arg = *J;
-      str = str + "   >> Arg "+to_string(arg)+"\n";
-    }
-  }
-
-  str = str + "Propagation: \n";
-  for (PROPAGATION::const_iterator
-       I = propagationRuleMap.begin(),
-       E = propagationRuleMap.end(); I != E; ++I) {
-    std::pair<string,TaintPropagationRule> pair = *I;
-    str = str + " - Name: "+ pair.first.data() + "\n";
-    str = str + "   - Sources\n";
-    for (ArgVector::const_iterator
-         J = pair.second.SrcArgs.begin(),
-         Y = pair.second.SrcArgs.end(); J != Y; ++J) {
-      int arg = *J;
-      str = str + "     >> Arg "+to_string(arg)+"\n";
-    }
-    str = str + "   - Destinations\n";
-    for (ArgVector::const_iterator
-         J = pair.second.DstArgs.begin(),
-         Y = pair.second.DstArgs.end(); J != Y; ++J) {
-      int arg = *J;
-      str = str + "     >> Arg "+to_string(arg)+"\n";
-    }
-  }
-
-  str = str + "Destinations: \n";
-  for (DESTINATION::const_iterator
-       I = destinationMap.begin(),
-       E = destinationMap.end(); I != E; ++I) {
-    std::pair<StringRef, SmallVector<int, SIZE_ARGS>> pair = *I;
-    str = str + " - Name: "+ pair.first.data() + "\n";
-    for (SmallVector<int, SIZE_ARGS>::const_iterator
-         J = pair.second.begin(),
-         Y = pair.second.end(); J != Y; ++J) {
-      int arg = *J;
-      str = str + "   >> Arg "+to_string(arg)+"\n";
-    }
-  }
-
-  str = str + "Filters:\n";
-  for (FILTER::const_iterator
-       I = filterMap.begin(),
-       E = filterMap.end(); I != E; ++I) {
-    std::pair<StringRef, SmallVector<int, SIZE_ARGS>> pair = *I;
-    str = str + " - Name: "+ pair.first.data() + "\n";
-    for (SmallVector<int, SIZE_ARGS>::const_iterator
-         J = pair.second.begin(),
-         Y = pair.second.end(); J != Y; ++J) {
-      int arg = *J;
-      str = str + "   >> Arg "+to_string(arg)+"\n";
-    }
-  }
-  str = str + "}\n";
-  return str;
-}
-
-bool CustomTaintChecker::Parser::executeXpathExpression(xmlDocPtr doc,
-                                           const xmlChar* xpathExpr,
-                                           ResultManager ResultManagerFunction){
-  xmlXPathContextPtr xpathCtx;
-  xmlXPathObjectPtr xpathObj;
-
-  assert(doc);
-  assert(xpathExpr);
-
-  // Create xpath evaluation context.
-  xpathCtx = xmlXPathNewContext(doc);
-  if(xpathCtx == NULL) {
-    debug("Error: unable to create new XPath context\n");
-    xmlFreeDoc(doc);
-    return false;
-  }
-
-  // Evaluate xpath expression.
-  xpathObj = xmlXPathEvalExpression(xpathExpr, xpathCtx);
-  if(xpathObj == NULL) {
-    debug("Error: unable to evaluate xpath expression << xpathExpr \n");
-    xmlXPathFreeContext(xpathCtx);
-    xmlFreeDoc(doc);
-    return false;
-  }
-
-  (this->*ResultManagerFunction)(xpathObj->nodesetval);
-
-  /* Cleanup */
-  xmlXPathFreeObject(xpathObj);
-  xmlXPathFreeContext(xpathCtx);
-  return true;
-}
-
-void CustomTaintChecker::Parser::parseSources(xmlNodeSetPtr nodes){
-  xmlNodePtr cur;
-  int size;
-
-  size = (nodes) ? nodes->nodeNr : 0;
-  for(int i = 0; i < size; ++i) {
-    assert(nodes->nodeTab[i]);
-
-    if(nodes->nodeTab[i]->type == XML_ELEMENT_NODE) {
-      cur = nodes->nodeTab[i];
-      string generateMethod;
-      SmallVector<int, SIZE_ARGS> generateArgs;
-
-      xmlNodePtr node = cur -> children;
-      while (node != cur -> last) {
-        if (xmlStrEqual(node -> name, xmlCharStrdup("method"))){
-          generateMethod = string(reinterpret_cast<char*>(node ->
-                                                          children -> content));
-        }
-        if (xmlStrEqual(node -> name, xmlCharStrdup("params"))){
-          generateArgs = SmallVector<int,SIZE_ARGS>();
-          xmlNodePtr paramsNodes = node -> children;
-          while(paramsNodes != node -> last){
-            if (xmlStrEqual(paramsNodes -> name, xmlCharStrdup("value"))){
-              generateArgs.push_back(stoi(reinterpret_cast<char*>(paramsNodes ->
-                                                         children -> content)));
-            }
-            paramsNodes = paramsNodes -> next;
-          }
-        }
-        node = node -> next;
-      }
-      sourceMap.push_back(pair<string, SmallVector<int, SIZE_ARGS>>
-                            (generateMethod, generateArgs));
-    } else {
-      cur = nodes->nodeTab[i];
-    }
-  }
-}
-
-void CustomTaintChecker::Parser::parsePropagationRules(xmlNodeSetPtr nodes){
-  xmlNodePtr cur;
-  int size;
-
-  size = (nodes) ? nodes->nodeNr : 0;
-  for(int i = 0; i < size; ++i) {
-    assert(nodes->nodeTab[i]);
-
-    if(nodes->nodeTab[i]->type == XML_ELEMENT_NODE) {
-      cur = nodes->nodeTab[i];
-      string propagateMethod;
-      TaintPropagationRule pr = TaintPropagationRule();
-
-      xmlNodePtr node = cur -> children;
-      while (node != cur -> last) {
-        if (xmlStrEqual(node -> name, xmlCharStrdup("method"))){
-          propagateMethod = string(reinterpret_cast<char*>(node->children->
-                                                             content));
-        }
-        if (xmlStrEqual(node -> name, xmlCharStrdup("sources"))){
-          xmlNodePtr paramsNodes = node -> children;
-          while(paramsNodes != node -> last){
-            if (xmlStrEqual(paramsNodes -> name, xmlCharStrdup("value"))){
-              pr.addSrcArg(stoi(reinterpret_cast<char*>(paramsNodes -> children
-                                                          -> content)));
-            }
-            paramsNodes = paramsNodes -> next;
-          }
-        }
-        if (xmlStrEqual(node -> name, xmlCharStrdup("destinations"))){
-          xmlNodePtr paramsNodes = node -> children;
-          while(paramsNodes != node -> last){
-            if (xmlStrEqual(paramsNodes -> name, xmlCharStrdup("value"))){
-              pr.addDstArg(stoi(reinterpret_cast<char*>(paramsNodes -> children
-                                                          -> content)));
-            }
-            paramsNodes = paramsNodes -> next;
-          }
-        }
-        node = node -> next;
-      }
-      propagationRuleMap.push_back(pair<string,TaintPropagationRule>(
-                                                          propagateMethod, pr));
-    } else {
-      cur = nodes->nodeTab[i];
-    }
-  }
-}
-
-void CustomTaintChecker::Parser::parseDestinations(xmlNodeSetPtr nodes){
-  xmlNodePtr cur;
-  int size;
-
-  size = (nodes) ? nodes->nodeNr : 0;
-  for(int i = 0; i < size; ++i) {
-    assert(nodes->nodeTab[i]);
-
-    if(nodes->nodeTab[i]->type == XML_ELEMENT_NODE) {
-      cur = nodes->nodeTab[i];
-      string destinationMethod;
-      SmallVector<int,SIZE_ARGS> destinationArgs;
-
-      xmlNodePtr node = cur -> children;
-      while (node != cur -> last) {
-        if (xmlStrEqual(node -> name, xmlCharStrdup("method"))){
-          destinationMethod = string(reinterpret_cast<char*>(node -> children ->
-                                                               content));
-        }
-        if (xmlStrEqual(node -> name, xmlCharStrdup("params"))){
-          destinationArgs = SmallVector<int,SIZE_ARGS>();
-          xmlNodePtr paramsNodes = node -> children;
-          while(paramsNodes != node -> last){
-            if (xmlStrEqual(paramsNodes -> name, xmlCharStrdup("value"))){
-              destinationArgs.push_back(stoi(reinterpret_cast<char*>(
-                                          paramsNodes -> children -> content)));
-            }
-            paramsNodes = paramsNodes -> next;
-          }
-        }
-        node = node -> next;
-      }
-      destinationMap.push_back(pair<string,SmallVector<int,SIZE_ARGS>>(
-                                            destinationMethod,destinationArgs));
-    } else {
-      cur = nodes->nodeTab[i];
-    }
-  }
-}
-
-void CustomTaintChecker::Parser::parseFilters(xmlNodeSetPtr nodes){
-  xmlNodePtr cur;
-  int size;
-
-  size = (nodes) ? nodes->nodeNr : 0;
-  for(int i = 0; i < size; ++i) {
-    assert(nodes->nodeTab[i]);
-      
-    if(nodes->nodeTab[i]->type == XML_ELEMENT_NODE) {
-      cur = nodes->nodeTab[i];
-      string filterMethod;
-      SmallVector<int, SIZE_ARGS> filterArgs;
-
-      xmlNodePtr node = cur -> children;
-      while (node != cur -> last) {
-        if (xmlStrEqual(node -> name, xmlCharStrdup("method"))){
-          filterMethod = string(reinterpret_cast<char*>(node -> children ->
-                                                          content));
-        }
-        if (xmlStrEqual(node -> name, xmlCharStrdup("params"))){
-          xmlNodePtr paramsNodes = node -> children;
-          while(paramsNodes != node -> last){
-            if (xmlStrEqual(paramsNodes -> name, xmlCharStrdup("value"))){
-              filterArgs.push_back(stoi(reinterpret_cast<char*>(paramsNodes ->
-                                                         children -> content)));
-            }
-            paramsNodes = paramsNodes -> next;
-          }
-        }
-        node = node -> next;
-      }
-      filterMap.push_back(pair<string,SmallVector<int,SIZE_ARGS>>(filterMethod,
-                                                                  filterArgs));
-    } else {
-      cur = nodes->nodeTab[i];
-    }
-  }
-}
-
-bool CustomTaintChecker::Parser::validateXMLAgaintSchema(xmlDocPtr doc){
-  xmlSchemaParserCtxtPtr ctxt;
-  xmlSchemaPtr schema;
-  xmlSchemaValidCtxtPtr validCtxt;
-
-  assert(doc);
-
-  ctxt = xmlSchemaNewParserCtxt(this -> XSDfilename.data());
-
-  if (ctxt != NULL){
-    schema = xmlSchemaParse(ctxt);
-    xmlSchemaFreeParserCtxt(ctxt);
-
-    validCtxt = xmlSchemaNewValidCtxt(schema);
-    int ret = xmlSchemaValidateDoc(validCtxt, doc);
-
-    if (ret == 0){
-      debug("Configuration file validates against schema\n");
-      return true;
-    }
-    else{
-      debug("Configuration file doesn't validate against schema\n");
-      return false;
-    }
-  }
-  return false;
-}
-#endif
 
 // ---------------------------- //
 //    WalkAST implementation    //
@@ -1705,15 +1292,15 @@ CustomTaintChecker::WalkAST::IsMemberExpr(Expr* Expr){
 
 template<typename... Args>
 void CustomTaintChecker::debug(const char* format, Args ... args){
-  if (debugFile)
-    fprintf(debugFile, format, args...);
+  if (DebugFile)
+    fprintf(DebugFile, format, args...);
 }
 
 void ento::registerCustomTaintChecker(CheckerManager &mgr) {
   CustomTaintChecker* checker = mgr.registerChecker<CustomTaintChecker>();
-  string configurationFilePath =
+  string ConfigurationFilePath =
     mgr.getAnalyzerOptions().getOptionAsString("ConfigurationFile", "", checker);
-  string debugFilePath =
+  string DebugFilePath =
     mgr.getAnalyzerOptions().getOptionAsString("DebugFile", "", checker);
-  checker -> initialization(configurationFilePath, debugFilePath);
+  checker -> initialization(ConfigurationFilePath, DebugFilePath);
 }
