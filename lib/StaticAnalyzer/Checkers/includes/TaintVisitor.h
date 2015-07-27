@@ -8,8 +8,7 @@
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// This file contains the declaration of the Instruction class, which is the
-/// base class for all of the VM instructions.
+/// This file contains the declaration of the TaintVisitor class.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -23,31 +22,35 @@ namespace taintutil {
   
   
   ///
-  /// TODO: describre the purpose of this class.
+  /// \brief Visitor class which walks through the AST in order to find uses
+  /// over global and class/struct member variables. If found, they should be
+  /// marked as tainted.
   ///
 	class TaintVisitor : public StmtVisitor<TaintVisitor> {
   protected:
     CheckerContext C;
     ProgramStateRef State;
+  
   public:
     TaintVisitor(CheckerContext &C, ProgramStateRef State): C(C), State(State){}
     virtual ~TaintVisitor(){}
     
-    //void VisitStmt(Stmt* stmt);
+    /// Not sure if we have to manage this.
     void VisitDeclStmt(DeclStmt* DeclStmt);
     
-    // Check if a member variable was passed to the call. If that is the case,
-    // mark it as tainted.
+    /// \brief Check if a member variable was passed to the call. If that is the
+    /// case, mark it as tainted.
     void VisitCallExpr(CallExpr *CE);
     
-    // The same as VisitCallExpr, but it goes further. Since is a member call, we
-    // continue visiting the invoked method.
+    /// \brief The same as VisitCallExpr, but it goes further. Since is a member
+    /// call, we continue visiting the invoked method.
     void VisitCXXMemberCallExpr(CallExpr *CE);
     
-    // If an assignment is found, get the left hand side part(lhs) and check if it
-    //is a member expression. If it is, mark as tainted.
+    /// \brief If an assignment is found, get the left hand side part(lhs) and
+    /// check if it is a member expression. If it is, mark as tainted.
     void VisitBinAssign(BinaryOperator *BO);
 
+    /// \brief Starts the walk.
     void Execute(Stmt *S);
 
   private:
