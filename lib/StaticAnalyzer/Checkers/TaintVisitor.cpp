@@ -32,9 +32,7 @@ namespace taintutil {
   }
   
   void
-  TaintVisitor::VisitDeclStmt(DeclStmt* declStmt){
-    // Not sure if we have to manage this.
-  }
+  TaintVisitor::VisitDeclStmt(DeclStmt* declStmt){}
   
   void
   TaintVisitor::VisitCallExpr(CallExpr *CE){

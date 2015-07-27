@@ -20,6 +20,7 @@
 
 #include "includes/TaintParser.h"
 #include "includes/TaintVisitor.h"
+#include "includes/TaintPropagation.h"
 
 #include "clang/AST/Attr.h"
 #include "ClangSACheckers.h"
@@ -47,7 +48,6 @@
 
 using namespace clang;
 using namespace ento;
-using namespace std;
 using namespace taintutil;
 namespace {
 
@@ -57,8 +57,8 @@ static FILE* DebugFile;
 
 // Location of configuration schema used to validate the configuration file
 // entered by the user.
-static const string ConfigSchema = string
-  (CLANG_RESOURCE_DIR+(string)"/taint-rules.xsd");
+static const std::string ConfigSchema = std::string
+  (CLANG_RESOURCE_DIR+(std::string)"/taint-rules.xsd");
 
 class CustomTaintChecker : public Checker< check::PostStmt<CallExpr>,
                                             check::PreStmt<CallExpr> > {
@@ -73,69 +73,9 @@ public:
   ~CustomTaintChecker() {
     fclose(DebugFile);
   }
-
-  void initialization(string ConfigurationFilePath, string DebugFilePath) {
-    
-    // Displaying welcome screen.
-    llvm::outs().changeColor(llvm::outs().SAVEDCOLOR, true, false);
-    llvm::outs() << "############################" << "\n";
-    llvm::outs() << "### Custom Taint Checker ###" << "\n";
-    llvm::outs() << "############################" << "\n";
-    
-    llvm::outs() << "Configuration file: " << ConfigurationFilePath.data();
-    llvm::outs() << "\n";
-    llvm::outs() << "Debug file: " << DebugFilePath.data() << "\n";
-    llvm::outs() << "\n";
-    llvm::outs().changeColor(llvm::outs().SAVEDCOLOR, false, false);
-
-    DebugFile = fopen(DebugFilePath.data(), "a");
-    debug("\n------Starting checker------\n");
-
-    // Instance Parser class.
-    #if defined CLANG_HAVE_LIBXML
-    TaintParser parser = TaintParser(ConfigurationFilePath, ConfigSchema);
-    
-    int result;
-    if ((result = parser.process())==0){
-      // Getting taint configuration data from TaintParser object.
-      SourceMap = parser.getSourceMap();
-      
-      TaintParser::PROPAGATION propagationRule = parser.getPropagationRuleMap();
-      for (TaintParser::PROPAGATION::const_iterator
-           I = propagationRule.begin(),
-           E = propagationRule.end(); I != E; ++I) {
-        std::pair<std::string, TaintParser::PropagationRule> pair = *I;
-        
-        TaintPropagationRule taintPropagationRule = TaintPropagationRule();
-        taintPropagationRule.setSrcArg(pair.second.SrcArgs);
-        taintPropagationRule.setDstArg(pair.second.DstArgs);
-        PropagationRuleMap.push_back(NAMEPROPAGATIONPAIR(pair.first,
-                                                         taintPropagationRule));
-      }
-      
-      DestinationMap = parser.getDestinationMap();
-      FilterMap = parser.getFilterMap();
-      debug(parser.toString().data());
-    }
-    else {
-      // An error occurred trying to parse configuration file.
-      switch (result){
-        case parser.Errors::ValidationError:
-          llvm::outs() <<
-            "Configuration file does not validate against schema.\n";
-          break;
-        default:
-          llvm::outs() <<
-            "An error occurred trying to load configuration file.\n";
-          break;
-      }
-      llvm::outs() <<
-        "Loading just default configuration.\n\n";
-    }
-    #else
-      debug("No LIBXML library found. Using default setting. \n");
-    #endif
-  }
+  
+  /// \brief Initialization class.
+  void initialization(std::string ConfigurationFilePath, std::string DebugFilePath);
 
   static void *getTag() { static int Tag; return &Tag; }
 
@@ -144,10 +84,6 @@ public:
   void checkPreStmt(const CallExpr *CE, CheckerContext &C) const;
 
 private:
-  static const unsigned InvalidArgIndex = 101;
-  /// Denotes the return vale.
-  static const unsigned ReturnValueIndex = 100;
-
   mutable std::unique_ptr<BugType> BT;
   inline void initBugType() const {
     if (!BT)
@@ -224,83 +160,77 @@ private:
   bool generateReportIfTainted(const Expr *E, const char Msg[],
                                CheckerContext &C) const;
                                
-  
-  typedef SmallVector<unsigned, 2> ArgVector;
- 
-  /// \brief A struct used to specify taint propagation rules for a function.
-  ///
-  /// If any of the possible taint source arguments is tainted, all of the
-  /// destination arguments should also be tainted. Use InvalidArgIndex in the
-  /// src list to specify that all of the arguments can introduce taint. Use
-  /// InvalidArgIndex in the dst arguments to signify that all the non-const
-  /// pointer and reference arguments might be tainted on return. If
-  /// ReturnValueIndex is added to the dst list, the return value will be
-  /// tainted.
-  struct TaintPropagationRule {
-    /// List of arguments which can be taint sources and should be checked.
-    ArgVector SrcArgs;
-    /// List of arguments which should be tainted on function return.
-    ArgVector DstArgs;
-    // TODO: Check if using other data structures would be more optimal.
-
-    TaintPropagationRule() {}
-
-    TaintPropagationRule(unsigned SArg,
-                         unsigned DArg, bool TaintRet = false) {
-      SrcArgs.push_back(SArg);
-      DstArgs.push_back(DArg);
-      if (TaintRet)
-        DstArgs.push_back(ReturnValueIndex);
-    }
-
-    TaintPropagationRule(unsigned SArg1, unsigned SArg2,
-                         unsigned DArg, bool TaintRet = false) {
-      SrcArgs.push_back(SArg1);
-      SrcArgs.push_back(SArg2);
-      DstArgs.push_back(DArg);
-      if (TaintRet)
-        DstArgs.push_back(ReturnValueIndex);
-    }
-
-    void setSrcArg(ArgVector SrcArgs){ this->SrcArgs = SrcArgs; }
-    void setDstArg(ArgVector DstArgs){ this->DstArgs = DstArgs; }
+                                              
+  class TaintPropagationRule : public TaintPropagation {
+  public:
+    TaintPropagationRule() : TaintPropagation(){}
     
-    inline void addSrcArg(unsigned A) { SrcArgs.push_back(A); }
-    inline void addDstArg(unsigned A)  { DstArgs.push_back(A); }
-
-    inline bool isNull() const { return SrcArgs.empty(); }
-
-    inline bool isDestinationArgument(unsigned ArgNum) const {
-      return (std::find(DstArgs.begin(),
-                        DstArgs.end(), ArgNum) != DstArgs.end());
-    }
-
+    TaintPropagationRule(unsigned SArg, unsigned DArg, bool TaintRet = false) :
+                           TaintPropagation(SArg, DArg, TaintRet){}
+    
+    TaintPropagationRule(unsigned SArg1, unsigned SArg2, unsigned DArg,
+                           bool TaintRet = false) : TaintPropagation(SArg1,
+                           SArg2, DArg, TaintRet){}
+    
+    ProgramStateRef process(const CallExpr *CE, CheckerContext &C) const;
+    
+  private:
     static inline bool isTaintedOrPointsToTainted(const Expr *E,
                                                   ProgramStateRef State,
-                                                  CheckerContext &C) {
-      return (State->isTainted(E, C.getLocationContext()) || isStdin(E, C) ||
-              (E->getType().getTypePtr()->isPointerType() &&
-               State->isTainted(getPointedToSymbol(C, E))));
-    }
-
-    /// \brief Pre-process a function which propagates taint according to the
-    /// taint rule.
-    ProgramStateRef process(const CallExpr *CE, CheckerContext &C) const;
-
+                                                  CheckerContext &C);
   };
 
-  typedef TaintParser::SOURCE SOURCE;
-  typedef std::pair<string,TaintPropagationRule> NAMEPROPAGATIONPAIR;
-  typedef SmallVector<NAMEPROPAGATIONPAIR, TaintParser::SIZE_METHODS>
-                                                                    PROPAGATION;
-  typedef TaintParser::DESTINATION DESTINATION;
-  typedef TaintParser::FILTER FILTER;
+  class WalkAST : public TaintVisitor {
+  public:
+    WalkAST(CheckerContext &C, ProgramStateRef State) : TaintVisitor(C, State){}
+  private:
+    void MarkTaint(Expr* Expr){
+    SymbolRef symbol = getPointedToSymbol(C, Expr);
+    if (symbol)
+      State->addTaint(symbol);
+    }
+  };
+                                              
+  typedef std::pair<std::string,TaintPropagationRule> NAMEPROPAGATIONPAIR;
+  typedef SmallVector<NAMEPROPAGATIONPAIR, SIZE_METHODS>  PROPAGATION;
 
-
-  // Structures to store information retrieved from xml configuration file.
+  
+  //
+  // Variables for holding information retrieved from xml configuration files.
+  //
+  // This checker defines four kind of functions:
+  // - Generators (or sources): methods that can introduce taint data to
+  // variables (or to object in which the functions are applied to).
+  // - Propagations: methods that can propagate taint data to other to other
+  // variables.
+  // - Destinations (or targets): methods that can have dangerous behaviour if
+  // taint data is passed on.
+  // - Filters (or sanitizers): methods that sanitize taint variables.
+  //
+                                              
+  ///
+  /// \brief Defines a map (string-list of args) which is an association
+  /// between generator function names, and its sources arguments.
+  ///
   SOURCE SourceMap;
+  
+  ///
+  /// \brief Defines a map (string-list of args) which is an association
+  /// between propagation function names, and its source arguments, and
+  /// destination arguments.
+  ///
   PROPAGATION PropagationRuleMap;
+  
+  ///
+  /// \brief Defines a map (string-list of args) which is an association
+  /// between destination function names, and its taget arguments.
+  ///
   DESTINATION DestinationMap;
+                                              
+  ///
+  /// \brief Defines a map (string-list of args) which is an association
+  /// between sanitizers function names, and its filter arguments.
+  ///
   FILTER FilterMap;
 
   /// Get the propagation rule for a given function.
@@ -308,24 +238,10 @@ private:
                                                 StringRef Name,
                                                 CheckerContext &C) const; 
 
-  class WalkAST : public TaintVisitor {
-    public:
-      WalkAST(CheckerContext &C, ProgramStateRef State) : TaintVisitor(C, State){}
-    private:
-      void MarkTaint(Expr* Expr){
-        SymbolRef symbol = getPointedToSymbol(C, Expr);
-        if (symbol)
-          State->addTaint(symbol);
-      }
-  };
-                                              
-template<typename... Args>
-static void debug(const char* format, Args ... args);
+  template<typename... Args>
+  static void debug(const char* format, Args ... args);
                                                
-};
-
-const unsigned CustomTaintChecker::ReturnValueIndex;
-const unsigned CustomTaintChecker::InvalidArgIndex;
+}; // End of CustomTaintChecker
 
 const char CustomTaintChecker::MsgUncontrolledFormatString[] =
   "Untrusted data is used as a format string "
@@ -346,7 +262,7 @@ const char CustomTaintChecker::MsgTaintedBufferSize[] =
   "character data and the null terminator)";
 
 
-} // end of anonymous namespace
+} // End of anonymous namespace
 
 /// Sets which are used to pass information from call pre-visit instruction
 /// to the call post-visit. The values are unsigned integers, which are either
@@ -355,10 +271,6 @@ const char CustomTaintChecker::MsgTaintedBufferSize[] =
 REGISTER_SET_WITH_PROGRAMSTATE(TaintArgsOnPostVisit, unsigned)
 REGISTER_SET_WITH_PROGRAMSTATE(UntaintArgsOnPostVisit, unsigned)
 
-
-// ---------------------------------------- //
-//    TaintPropagationRule implementation   //
-// ---------------------------------------- //
 
 CustomTaintChecker::TaintPropagationRule
 CustomTaintChecker::getTaintPropagationRule( const FunctionDecl *FDecl,
@@ -396,10 +308,10 @@ CustomTaintChecker::getTaintPropagationRule( const FunctionDecl *FDecl,
     for (PROPAGATION::const_iterator
          I = PropagationRuleMap.begin(),
          E = PropagationRuleMap.end(); I != E; ++I) {
-      std::pair<StringRef,TaintPropagationRule> pair = *I;
+      std::pair<std::string,TaintPropagationRule> pair = *I;
       debug("Inside loop. Checking %s\n", pair.first.data());
-      if (pair.first.equals(Name)){
-          debug("Propagation Rule found for method %s\n",Name.data());
+      if (Name.equals(pair.first)){
+          debug("Propagation Rule found for method %s\n", Name.data());
         Rule = pair.second;
       }
     }
@@ -457,6 +369,70 @@ CustomTaintChecker::getTaintPropagationRule( const FunctionDecl *FDecl,
 //     CustomTaintChecker implementation    //
 // ---------------------------------------- //
 
+void CustomTaintChecker::initialization(std::string ConfigurationFilePath,
+                                        std::string DebugFilePath) {
+  
+  // Displaying welcome screen.
+  llvm::outs().changeColor(llvm::outs().SAVEDCOLOR, true, false);
+  llvm::outs() << "############################" << "\n";
+  llvm::outs() << "### Custom Taint Checker ###" << "\n";
+  llvm::outs() << "############################" << "\n";
+  
+  llvm::outs() << "Configuration file: " << ConfigurationFilePath.data();
+  llvm::outs() << "\n";
+  llvm::outs() << "Debug file: " << DebugFilePath.data() << "\n";
+  llvm::outs() << "\n";
+  llvm::outs().changeColor(llvm::outs().SAVEDCOLOR, false, false);
+  
+  DebugFile = fopen(DebugFilePath.data(), "a");
+  debug("\n------Starting checker------\n");
+  
+  // Instance Parser class.
+#if defined CLANG_HAVE_LIBXML
+  TaintParser parser = TaintParser(ConfigurationFilePath, ConfigSchema);
+  
+  int result;
+  if ((result = parser.process())==0){
+    // Getting taint configuration data from TaintParser object.
+    SourceMap = parser.getSourceMap();
+    
+    TaintParser::PROPAGATION propagationRule = parser.getPropagationRuleMap();
+    for (TaintParser::PROPAGATION::const_iterator
+         I = propagationRule.begin(),
+         E = propagationRule.end(); I != E; ++I) {
+      std::pair<std::string, TaintParser::PropagationRule> pair = *I;
+      
+      TaintPropagationRule taintPropagationRule = TaintPropagationRule();
+      taintPropagationRule.setSrcArg(pair.second.SrcArgs);
+      taintPropagationRule.setDstArg(pair.second.DstArgs);
+      PropagationRuleMap.push_back(NAMEPROPAGATIONPAIR(pair.first,
+                                                       taintPropagationRule));
+    }
+    
+    DestinationMap = parser.getDestinationMap();
+    FilterMap = parser.getFilterMap();
+    debug(parser.toString().data());
+  }
+  else {
+    // An error occurred trying to parse configuration file.
+    switch (result){
+      case parser.Errors::ValidationError:
+        llvm::outs() <<
+        "Configuration file does not validate against schema.\n";
+        break;
+      default:
+        llvm::outs() <<
+        "An error occurred trying to load configuration file.\n";
+        break;
+    }
+    llvm::outs() <<
+    "Loading just default configuration.\n\n";
+  }
+#else
+  debug("No LIBXML library found. Using default setting. \n");
+#endif
+}
+
 void CustomTaintChecker::checkPreStmt(const CallExpr *CE,
                                        CheckerContext &C)  const{
   // Check for errors first.
@@ -494,11 +470,11 @@ void CustomTaintChecker::checkGenerators(const CallExpr *CE,
   debug("In checkGenerators: for method %s\n", Name.data());
   for (SOURCE::const_iterator I = SourceMap.begin(), E = SourceMap.end();
          I != E; ++I) {
-    std::pair<StringRef, SmallVector<int, TaintParser::SIZE_ARGS>> pair  = *I;
+    std::pair<std::string, SmallVector<int, SIZE_ARGS>> pair  = *I;
     debug("In checkGenerators: Checking gen method %s\n", pair.first.data());
     if (Name.equals(pair.first)){
       debug("Generator found. Args size %zu \n", pair.second.size());
-      for (llvm::SmallVector<int, TaintParser::SIZE_ARGS>::const_iterator
+      for (llvm::SmallVector<int, SIZE_ARGS>::const_iterator
              J = pair.second.begin(), Z = pair.second.end(); J != Z; ++J) {
 
         unsigned ArgNum = *J;
@@ -556,11 +532,11 @@ void CustomTaintChecker::checkFilters(const CallExpr *CE, CheckerContext &C)
 
   for (FILTER::const_iterator I = FilterMap.begin(), E = FilterMap.end();
          I != E; ++I) {
-    std::pair<StringRef, SmallVector<int, TaintParser::SIZE_ARGS>> pair  = *I;
+    std::pair<std::string, SmallVector<int, SIZE_ARGS>> pair  = *I;
     debug("In checkFilters: Checking filter method %s\n", pair.first.data());
     if (Name.equals(pair.first)){
       debug("Filter found. Args size %zu \n", pair.second.size());
-      for (llvm::SmallVector<int, TaintParser::SIZE_ARGS>::const_iterator
+      for (llvm::SmallVector<int, SIZE_ARGS>::const_iterator
              J = pair.second.begin(), Z = pair.second.end(); J != Z; ++J) {
                 
         unsigned ArgNum = *J;
@@ -847,7 +823,23 @@ SymbolRef CustomTaintChecker::getPointedToSymbol(CheckerContext &C,
   return nullptr;
 }
 
-ProgramStateRef 
+
+// ------------------------------------------ //
+//     TaintPropagationRule implementation    //
+// ------------------------------------------ //
+
+inline bool
+CustomTaintChecker::TaintPropagationRule::isTaintedOrPointsToTainted(
+                                                          const Expr *E,
+                                                          ProgramStateRef State,
+                                                          CheckerContext &C) {
+  
+  return (State->isTainted(E, C.getLocationContext()) || isStdin(E, C) ||
+          (E->getType().getTypePtr()->isPointerType() &&
+           State->isTainted(getPointedToSymbol(C, E))));
+}
+
+ProgramStateRef
 CustomTaintChecker::TaintPropagationRule::process(const CallExpr *CE,
                                                    CheckerContext &C) const {
   // Added just for logging purpose.
@@ -891,9 +883,9 @@ CustomTaintChecker::TaintPropagationRule::process(const CallExpr *CE,
     // Should we mark all arguments as tainted?
     if (ArgNum == InvalidArgIndex) {
       // For all pointer and references that were passed in:
-      //   If they are not pointing to const data, mark data as tainted.
-      //   TODO: So far we are just going one level down; ideally we'd need to
-      //         recurse here.
+      // If they are not pointing to const data, mark data as tainted.
+      // TODO: So far we are just going one level down; ideally we'd need to
+      // recurse here.
       for (unsigned int i = 0; i < CE->getNumArgs(); ++i) {
         const Expr *Arg = CE->getArg(i);
         // Process pointer argument.
@@ -1073,7 +1065,7 @@ bool CustomTaintChecker::checkUncontrolledFormatString(const CallExpr *CE,
   if (!getPrintfFormatArgumentNum(CE, C, ArgNum))
     return false;
 
-  // If either the format string content or the pointer itself are tainted, warn.
+  // If either the format string content or the pointer itself are tainted,warn.
   if (generateReportIfTainted(CE->getArg(ArgNum),
                               MsgUncontrolledFormatString, C))
     return true;
@@ -1086,12 +1078,12 @@ bool CustomTaintChecker::checkCustomDestination(const CallExpr *CE,
   debug("In checkCustomDestination: for CE name %s\n",Name.data());
   for (DESTINATION::const_iterator I = DestinationMap.begin(),
        E = DestinationMap.end(); I != E; ++I) {
-    std::pair<StringRef,SmallVector<int,TaintParser::SIZE_ARGS>> pair = *I;
+    std::pair<std::string,SmallVector<int,SIZE_ARGS>> pair = *I;
     debug("In checkCustomDestination: Checking %s\n",pair.first.data());
-    if (pair.first.equals(Name)){
+    if (Name.equals(pair.first)){
       debug("In checkCustomDestination: destination Rule found for method %s\n",
               Name.data());
-      for (SmallVector<int,TaintParser::SIZE_ARGS>::const_iterator I = pair.second.begin(),
+      for (SmallVector<int,SIZE_ARGS>::const_iterator I = pair.second.begin(),
            E = pair.second.end(); I != E; ++I) {
         int ArgNum = *I;
         debug("In checkCustomDestination: checking arg %d\n", ArgNum);
@@ -1182,9 +1174,9 @@ void CustomTaintChecker::debug(const char* format, Args ... args){
 
 void ento::registerCustomTaintChecker(CheckerManager &mgr) {
   CustomTaintChecker* checker = mgr.registerChecker<CustomTaintChecker>();
-  string ConfigurationFilePath =
-    mgr.getAnalyzerOptions().getOptionAsString("ConfigurationFile", "", checker);
-  string DebugFilePath =
-    mgr.getAnalyzerOptions().getOptionAsString("DebugFile", "", checker);
+  std::string ConfigurationFilePath =
+   mgr.getAnalyzerOptions().getOptionAsString("ConfigurationFile", "", checker);
+  std::string DebugFilePath =
+   mgr.getAnalyzerOptions().getOptionAsString("DebugFile", "", checker);
   checker -> initialization(ConfigurationFilePath, DebugFilePath);
 }
