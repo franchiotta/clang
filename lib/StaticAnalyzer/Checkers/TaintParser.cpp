@@ -78,7 +78,7 @@ namespace taintutil {
   
 	bool
 	TaintParser::executeXpathExpression(xmlDocPtr doc, const xmlChar* xpathExpr,
-	                                  ResultManager ResultManagerFunction){
+                                      ResultManager ResultManagerFunction){
     xmlXPathContextPtr xpathCtx;
     xmlXPathObjectPtr xpathObj;
     
@@ -128,15 +128,15 @@ namespace taintutil {
         while (node != cur -> last) {
           if (xmlStrEqual(node -> name, xmlCharStrdup("method"))){
             generateMethod = std::string(reinterpret_cast<char*>(node ->
-                                                            children -> content));
+                                                          children -> content));
           }
           if (xmlStrEqual(node -> name, xmlCharStrdup("params"))){
             generateArgs = SmallVector<int,SIZE_ARGS>();
             xmlNodePtr paramsNodes = node -> children;
             while(paramsNodes != node -> last){
               if (xmlStrEqual(paramsNodes -> name, xmlCharStrdup("value"))){
-                generateArgs.push_back(std::stoi(reinterpret_cast<char*>(paramsNodes ->
-                                                                    children -> content)));
+                generateArgs.push_back(std::stoi(reinterpret_cast<char*>(
+                                          paramsNodes -> children -> content)));
               }
               paramsNodes = paramsNodes -> next;
             }
@@ -151,7 +151,7 @@ namespace taintutil {
     }
   }
 
-    void
+  void
 	TaintParser::parsePropagationRules(xmlNodeSetPtr nodes){
     xmlNodePtr cur;
     int size;
@@ -313,7 +313,7 @@ namespace taintutil {
   }
   
   
-  TaintParser::SOURCE TaintParser::getSourceMap(){
+  SOURCE TaintParser::getSourceMap(){
     return sourceMap;
   }
   
@@ -321,11 +321,11 @@ namespace taintutil {
     return propagationRuleMap;
   }
   
-  TaintParser::DESTINATION TaintParser::getDestinationMap(){
+  DESTINATION TaintParser::getDestinationMap(){
     return destinationMap;
   }
   
-  TaintParser::FILTER TaintParser::getFilterMap(){
+  FILTER TaintParser::getFilterMap(){
     return filterMap;
   }
   

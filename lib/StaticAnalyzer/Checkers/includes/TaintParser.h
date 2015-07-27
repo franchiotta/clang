@@ -8,8 +8,7 @@
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// This file contains the declaration of the Instruction class, which is the
-/// base class for all of the VM instructions.
+/// This file contains the declaration of the TaintParser class.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -23,19 +22,26 @@ using namespace llvm;
 
 namespace taintutil {
   
-  /// \brief Parser class to retrieve information for sources, propagations
-  ///rules, destinations, and filters from a specification xml file.
-  /// For this configuration functionality, it is necessary that clang project
-  /// has libxml2 enabled.
-  class TaintParser {
+  static const int SIZE_METHODS = 5;
+  static const int SIZE_ARGS = 2;
 
+  typedef SmallVector<unsigned, 2> ArgVector;
+  
+  typedef SmallVector<std::pair<std::string, SmallVector<int, SIZE_ARGS>>,
+  SIZE_METHODS> SOURCE;
+  typedef SmallVector<std::pair<std::string,SmallVector<int, SIZE_ARGS>>,
+  SIZE_METHODS> DESTINATION;
+  typedef SmallVector<std::pair<std::string,SmallVector<int, SIZE_ARGS>>,
+  SIZE_METHODS> FILTER;
+  
+  ///
+  /// \brief Parser class to retrieve configuration taint information from a
+  /// specification xml file.
+  /// For this functionality, it is needed to have libxml2 enabled.
+  ///
+  class TaintParser {
   public:
-    TaintParser(std::string XMLfilename, std::string XSDfilename);
-    ~TaintParser();
-    short process();
-    
-    typedef SmallVector<unsigned, 2> ArgVector;
-    
+  
     struct PropagationRule {
       ArgVector SrcArgs;
       ArgVector DstArgs;
@@ -43,31 +49,52 @@ namespace taintutil {
       inline void addSrcArg(unsigned A) { SrcArgs.push_back(A); }
       inline void addDstArg(unsigned A)  { DstArgs.push_back(A); }
     };
-    
-    // Type definitions
-    static const int SIZE_METHODS = 5;
-    static const int SIZE_ARGS = 2;
-    
-    typedef SmallVector<std::pair<std::string, SmallVector<int, SIZE_ARGS>>,
-    SIZE_METHODS> SOURCE;
-    typedef SmallVector<std::pair<std::string, PropagationRule>, SIZE_METHODS>
-    PROPAGATION;
-    typedef SmallVector<std::pair<std::string,SmallVector<int, SIZE_ARGS>>,
-    SIZE_METHODS> DESTINATION;
-    typedef SmallVector<std::pair<std::string,SmallVector<int, SIZE_ARGS>>,
-    SIZE_METHODS> FILTER;
   
+    typedef SmallVector<std::pair<std::string, PropagationRule>, SIZE_METHODS>
+      PROPAGATION;
+    
+    // Constructors
+    TaintParser(std::string XMLfilename, std::string XSDfilename);
+
+    // Destructor
+    ~TaintParser();
+
+    ///
+    /// \brief Carries out the processing.
+    ///
+    short process();
+
+    ///
+    /// \brief Defines a map (string-list of args) which is an association
+    /// between generator function names, and its sources arguments.
+    ///
     SOURCE getSourceMap();
+    
+    ///
+    /// \brief Defines a map (string-list of args) which is an association
+    /// between propagation function names, and its source arguments, and
+    /// destination arguments.
+    ///
     PROPAGATION getPropagationRuleMap();
+    
+    ///
+    /// \brief Defines a map (string-list of args) which is an association
+    /// between destination function names, and its taget arguments.
+    ///
     DESTINATION getDestinationMap();
+
+    ///
+    /// \brief Defines a map (string-list of args) which is an association
+    /// between sanitizers function names, and its filter arguments.
+    ///
     FILTER getFilterMap();
+    
     std::string toString();
 
     enum Errors {
       ValidationError=-2,
       GeneralError=-1
     };
-	
   private:
     std::string XMLfilename; // Holds the xml configuration filename.
     std::string XSDfilename; // Holds the schema filename.
