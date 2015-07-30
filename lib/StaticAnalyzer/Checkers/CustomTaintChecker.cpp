@@ -796,8 +796,9 @@ SymbolRef CustomTaintChecker::getPointedToSymbol(CheckerContext &C,
     return nullptr;
 
   Optional<Loc> AddrLoc = AddrVal.getAs<Loc>();
-  if (!AddrLoc)
-    return nullptr;
+  if (!AddrLoc) {
+    return AddrVal.getAsSymbol();
+  }
     
   const PointerType *ArgTy =
     dyn_cast<PointerType>(Arg->getType().getCanonicalType().getTypePtr());
