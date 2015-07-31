@@ -681,9 +681,7 @@ bool CustomTaintChecker::propagateFilterFromPre(const CallExpr *CE,
 
     // Special handling for the tainted return value.
     if (ArgNum == ReturnValueIndex) {
-      // For now, if the variable is filtered, it marks the variable as tainted
-      // using the tag "UntaintedTag" (see TaintedTag.h)
-      State = State->addTaint(CE, C.getLocationContext(), UntaintedTag);
+      State = State->removeTaint(CE, C.getLocationContext());
       continue;
     }
 
@@ -696,9 +694,7 @@ bool CustomTaintChecker::propagateFilterFromPre(const CallExpr *CE,
     SymbolRef Sym = getPointedToSymbol(C, Arg);
     if (Sym) {
       debug("Untaint argument %d of method %s \n",ArgNum, Name.data());
-      // For now, if the variable is filtered, it marks the variable as tainted
-      //using the tag "UntaintedTag" (see TaintedTag.h)
-      State = State->addTaint(Sym, UntaintedTag);
+      State = State->removeTaint(Sym);
     }
     else{
       debug("Symbol not found for argument %d of method %s \n",ArgNum,
@@ -1040,12 +1036,10 @@ bool CustomTaintChecker::generateReportIfTainted(const Expr *E,
                                                   CheckerContext &C) const {
   assert(E);
 
-  // Check for taint. It only informs if the symbol is tainted with
-  // the TaintTagGeneric tag. Ignoring those that are marked as
-  // UntaintedTag (filtered symbols).
+  // Check for taint.
   ProgramStateRef State = C.getState();
-  if (!State->isTainted(getPointedToSymbol(C, E), TaintTagGeneric) &&
-      !State->isTainted(E, C.getLocationContext(), TaintTagGeneric))
+  if (!State->isTainted(getPointedToSymbol(C, E)) &&
+      !State->isTainted(E, C.getLocationContext()))
     return false;
 
   // Generate diagnostic.
