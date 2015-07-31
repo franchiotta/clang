@@ -20,7 +20,6 @@ namespace ento {
 /// The type of taint, which helps to differentiate between different types of
 /// taint.
 typedef unsigned TaintTagType;
-static const TaintTagType UntaintedTag = -1;
 static const TaintTagType TaintTagGeneric = 0;
 
 }}
