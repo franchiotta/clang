@@ -684,6 +684,44 @@ ProgramStateRef ProgramState::addTaint(SymbolRef Sym,
   return NewState;
 }
 
+ProgramStateRef ProgramState::removeTaint(const Stmt *S,
+                                            const LocationContext *LCtx,
+                                            TaintTagType Kind) const {
+  if (const Expr *E = dyn_cast_or_null<Expr>(S))
+    S = E->IgnoreParens();
+  
+  SymbolRef Sym = getSVal(S, LCtx).getAsSymbol();
+  if (Sym)
+    return removeTaint(Sym, Kind);
+  
+  const MemRegion *R = getSVal(S, LCtx).getAsRegion();
+  removeTaint(R, Kind);
+  
+  // Cannot remove taint, so just return the state.
+  return this;
+}
+
+ProgramStateRef ProgramState::removeTaint(const MemRegion *R,
+                                              TaintTagType Kind) const {
+  if (const SymbolicRegion *SR = dyn_cast_or_null<SymbolicRegion>(R))
+    return removeTaint(SR->getSymbol(), Kind);
+  return this;
+}
+
+
+ProgramStateRef ProgramState::removeTaint(SymbolRef Sym,
+                                              TaintTagType Kind) const {
+  // If this is a symbol cast, remove the cast before removing the taint. Taint
+  // is cast agnostic.
+  while (const SymbolCast *SC = dyn_cast<SymbolCast>(Sym))
+    Sym = SC->getOperand();
+  
+  ProgramStateRef NewState = remove<TaintMap>(Sym);
+  assert(NewState);
+  return NewState;
+}
+
+
 bool ProgramState::isTainted(const Stmt *S, const LocationContext *LCtx,
                              TaintTagType Kind) const {
   if (const Expr *E = dyn_cast_or_null<Expr>(S))
