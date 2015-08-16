@@ -35,4 +35,7 @@
 /* Linker version detected at compile time. */
 #cmakedefine HOST_LINK_VERSION "${HOST_LINK_VERSION}"
 
+/* Directory where schema files are located. */
+#define CLANG_SCHEMA_DIR "${CLANG_SCHEMA_DIR}"
+
 #endif
