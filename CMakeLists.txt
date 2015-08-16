@@ -178,7 +178,7 @@ if (LIBXML2_FOUND)
   include_directories(SYSTEM ${LIBXML2_INCLUDE_DIR})
 endif()
 
-set(CLANG_RESOURCE_DIR ${CMAKE_CURRENT_BINARY_DIR}/resources CACHE STRING
+set(CLANG_RESOURCE_DIR "" CACHE STRING
   "Relative directory from the Clang binary to its resource files.")
 
 set(C_INCLUDE_DIRS "" CACHE STRING
@@ -238,6 +238,9 @@ set(CLANG_LIBDIR_SUFFIX "${LLVM_LIBDIR_SUFFIX}")
 
 set(CLANG_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 set(CLANG_BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR})
+
+set(CLANG_SCHEMA_DIR ${CLANG_BINARY_DIR}/schemas CACHE STRING
+    "Directory where schemas files are located.")
 
 if( CMAKE_SOURCE_DIR STREQUAL CMAKE_BINARY_DIR AND NOT MSVC_IDE )
   message(FATAL_ERROR "In-source builds are not allowed. CMake would overwrite "

@@ -99,6 +99,6 @@ add_clang_library(clangStaticAnalyzerCheckers
 
 add_custom_command(TARGET clangStaticAnalyzerCheckers
                    COMMAND ${CMAKE_COMMAND} -E copy
-                   ${CMAKE_SOURCE_DIR}/tools/clang/resources/taint-rules.xsd
-                   ${CMAKE_BINARY_DIR}/tools/clang/resources/taint-rules.xsd
+                   ${CMAKE_SOURCE_DIR}/tools/clang/schemas/taint-rules.xsd
+                   ${CMAKE_BINARY_DIR}/tools/clang/schemas/taint-rules.xsd
                    )

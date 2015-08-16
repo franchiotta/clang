@@ -47,4 +47,8 @@
 /* enable x86 relax relocations by default */
 #cmakedefine01 ENABLE_X86_RELAX_RELOCATIONS
 
+/* Directory where schema files are located. */
+#define CLANG_SCHEMA_DIR "${CLANG_SCHEMA_DIR}"
+
+
 #endif
