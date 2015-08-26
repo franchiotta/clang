@@ -62,29 +62,27 @@ static const std::string ConfigSchema =
     std::string(CLANG_SCHEMA_DIR + (std::string) "/taint-rules.xsd");
 
 class CustomTaintChecker
-    : public Checker<check::PostStmt<CallExpr>, check::PreStmt<CallExpr>> {
+    : public Checker<check::PostStmt<CallExpr>, check::PreStmt<CallExpr>,
+                     check::Bind> {
 public:
-  CustomTaintChecker() {
-    SourceMap = SOURCE();
-    PropagationRuleMap = PROPAGATION();
-    DestinationMap = DESTINATION();
-    FilterMap = FILTER();
-  }
+  CustomTaintChecker() {}
 
   ~CustomTaintChecker() { fclose(DebugFile); }
-
-  /// \brief Initialization class.
-  void initialization(std::string ConfigurationFilePath,
-                      std::string DebugFilePath);
 
   static void *getTag() {
     static int Tag;
     return &Tag;
   }
 
+  /// \brief Initialization class.
+  void initialization(std::string ConfigurationFilePath,
+                      std::string DebugFilePath);
+
   void checkPostStmt(const CallExpr *CE, CheckerContext &C) const;
 
   void checkPreStmt(const CallExpr *CE, CheckerContext &C) const;
+
+  void checkBind(SVal Loc, SVal Val, const Stmt *S, CheckerContext &) const;
 
 private:
   mutable std::unique_ptr<BugType> BT;
@@ -134,8 +132,11 @@ private:
   /// Functions defining the attack surface.
   typedef ProgramStateRef (CustomTaintChecker::*FnCheck)(
       const CallExpr *, CheckerContext &C) const;
+
   ProgramStateRef postScanf(const CallExpr *CE, CheckerContext &C) const;
+
   ProgramStateRef postSocket(const CallExpr *CE, CheckerContext &C) const;
+
   ProgramStateRef postRetTaint(const CallExpr *CE, CheckerContext &C) const;
 
   /// Taint the scanned input if the file is tainted.
@@ -143,6 +144,7 @@ private:
 
   /// Check for CWE-134: Uncontrolled Format String.
   static const char MsgUncontrolledFormatString[];
+
   bool checkUncontrolledFormatString(const CallExpr *CE,
                                      CheckerContext &C) const;
 
@@ -152,12 +154,14 @@ private:
   /// CERT/STR02-C. "Sanitize data passed to complex subsystems"
   /// CWE-78, "Failure to Sanitize Data into an OS Command"
   static const char MsgSanitizeSystemArgs[];
+
   bool checkSystemCall(const CallExpr *CE, StringRef Name,
                        CheckerContext &C) const;
 
   /// Check if tainted data is used as a buffer size ins strn.. functions,
   /// and allocators.
   static const char MsgTaintedBufferSize[];
+
   bool checkTaintedBufferSize(const CallExpr *CE, const FunctionDecl *FDecl,
                               CheckerContext &C) const;
 
@@ -166,7 +170,15 @@ private:
                                CheckerContext &C) const;
 
   NAME_ARGS_PAIR *getSourceMethodPair(StringRef Name) const;
+
   NAME_ARGS_PAIR *getDestinationMethodPair(StringRef Name) const;
+
+  bool IsMemberExpr(Expr *Expr) const;
+
+  bool HasGlobalStorage(Expr *Expr) const;
+
+  void displayWelcome(std::string ConfigFileName,
+                      std::string DebugFileName) const;
 
   class TaintPropagationRule : public TaintPropagation {
   public:
@@ -192,21 +204,8 @@ private:
                                                StringRef Name,
                                                CheckerContext &C) const;
 
-  class WalkAST : public TaintVisitor {
-  public:
-    WalkAST(CheckerContext &C, ProgramStateRef State)
-        : TaintVisitor(C, State) {}
-
-  private:
-    void MarkTaint(Expr *Expr) {
-      SymbolRef symbol = getPointedToSymbol(C, Expr);
-      if (symbol)
-        State->addTaint(symbol);
-    }
-  };
-
   typedef std::pair<std::string, TaintPropagationRule> NAMEPROPAGATIONPAIR;
-  typedef SmallVector<NAMEPROPAGATIONPAIR, SIZE_METHODS> PROPAGATION;
+  typedef SmallVector<NAMEPROPAGATIONPAIR, SIZE_METHODS> PROPAGATION_MAP;
 
   //
   // Variables for holding information retrieved from xml configuration files.
@@ -225,31 +224,40 @@ private:
   /// \brief Defines a map (string-list of args) which is an association
   /// between generator function names, and its sources arguments.
   ///
-  SOURCE SourceMap;
+  static SOURCE_MAP SourceMap;
 
   ///
   /// \brief Defines a map (string-list of args) which is an association
   /// between propagation function names, and its source arguments, and
   /// destination arguments.
   ///
-  PROPAGATION PropagationRuleMap;
+  static PROPAGATION_MAP PropagationRuleMap;
 
   ///
   /// \brief Defines a map (string-list of args) which is an association
   /// between destination function names, and its taget arguments.
   ///
-  DESTINATION DestinationMap;
+  static DESTINATION_MAP DestinationMap;
 
   ///
   /// \brief Defines a map (string-list of args) which is an association
   /// between sanitizers function names, and its filter arguments.
   ///
-  FILTER FilterMap;
+  static FILTER_MAP FilterMap;
 
   template <typename... Args>
   static void debug(const char *format, Args... args);
 
 }; // End of CustomTaintChecker
+
+SOURCE_MAP CustomTaintChecker::SourceMap = SOURCE_MAP();
+
+CustomTaintChecker::PROPAGATION_MAP CustomTaintChecker::PropagationRuleMap =
+    PROPAGATION_MAP();
+
+DESTINATION_MAP CustomTaintChecker::DestinationMap = DESTINATION_MAP();
+
+FILTER_MAP CustomTaintChecker::FilterMap = FILTER_MAP();
 
 const char CustomTaintChecker::MsgUncontrolledFormatString[] =
     "Untrusted data is used as a format string "
@@ -312,8 +320,8 @@ CustomTaintChecker::getTaintPropagationRule(const FunctionDecl *FDecl,
   // If the previous case did not find a Propagation Rule for the method, now it
   // has to check the custom rules defined by the user.
   if (Rule.isNull()) {
-    for (PROPAGATION::const_iterator I = PropagationRuleMap.begin(),
-                                     E = PropagationRuleMap.end();
+    for (PROPAGATION_MAP::const_iterator I = PropagationRuleMap.begin(),
+                                         E = PropagationRuleMap.end();
          I != E; ++I) {
       std::pair<std::string, TaintPropagationRule> pair = *I;
       debug("Inside loop. Checking %s\n", pair.first.data());
@@ -379,19 +387,9 @@ CustomTaintChecker::getTaintPropagationRule(const FunctionDecl *FDecl,
 void CustomTaintChecker::initialization(std::string ConfigurationFilePath,
                                         std::string DebugFilePath) {
 
-  // Displaying welcome screen.
-  llvm::outs().changeColor(llvm::outs().SAVEDCOLOR, true, false);
-  llvm::outs() << "### Custom Taint Checker ###" << "\n";
-  llvm::outs() << "Configuration file: " << ConfigurationFilePath.data();
-  llvm::outs() << "\n";
-  llvm::outs() << "Debug file: " << DebugFilePath.data() << "\n";
-  llvm::outs() << "\n";
-  llvm::outs().changeColor(llvm::outs().SAVEDCOLOR, false, false);
-
+  displayWelcome(ConfigurationFilePath, DebugFilePath);
   DebugFile = fopen(DebugFilePath.data(), "a");
-  debug("\n------Starting checker------\n");
 
-// Instance Parser class.
 #if defined CLANG_HAVE_LIBXML
   TaintParser parser = TaintParser(ConfigurationFilePath, ConfigSchema);
 
@@ -399,11 +397,11 @@ void CustomTaintChecker::initialization(std::string ConfigurationFilePath,
   if ((result = parser.process()) == 0) {
     // Getting taint configuration data from TaintParser object.
     SourceMap = parser.getSourceMap();
+    TaintParser::PROPAGATION_MAP propagationRule =
+        parser.getPropagationRuleMap();
 
-    TaintParser::PROPAGATION propagationRule = parser.getPropagationRuleMap();
-    for (TaintParser::PROPAGATION::const_iterator I = propagationRule.begin(),
-                                                  E = propagationRule.end();
-         I != E; ++I) {
+    for (TaintParser::PROPAGATION_MAP::const_iterator I =
+             propagationRule.begin(), E = propagationRule.end(); I != E; ++I) {
       std::pair<std::string, TaintParser::PropagationRule> pair = *I;
 
       TaintPropagationRule taintPropagationRule = TaintPropagationRule();
@@ -457,6 +455,44 @@ void CustomTaintChecker::checkPostStmt(const CallExpr *CE,
   addSourcesPost(CE, C);
 }
 
+void CustomTaintChecker::checkBind(SVal Loc, SVal Val, const Stmt *S,
+                                   CheckerContext &C) const {
+
+  S->dump();
+  const Decl *D = C.getCurrentAnalysisDeclContext()->getDecl();
+  if (!D)
+    return;
+
+  // It only continues for FunctionDecl.
+  const FunctionDecl *FD = dyn_cast<FunctionDecl>(D);
+  if (!FD)
+    return;
+
+  // If the FunctionDecl name is one of the sources, it continues. Otherwise,
+  // it finishes.
+  StringRef name = FD->getNameInfo().getName().getAsString();
+  if (!getSourceMethodPair(name))
+    return;
+
+  // It just cares about binary operations(specifically assignments).
+  const BinaryOperator *BO = dyn_cast<BinaryOperator>(S);
+  if (!BO)
+    return;
+
+  if (BO->isAssignmentOp()) {
+    Expr *Lhs = BO->getLHS(); // Getting the left hand side of the assignment.
+    if (IsMemberExpr(Lhs) || HasGlobalStorage(Lhs)) {
+      SymbolRef symbol = Val.getAsSymbol();
+      if (symbol) {
+        ProgramStateRef State = C.getState();
+        State = State->addTaint(symbol);
+        if (State != C.getState())
+          C.addTransition(State);
+      }
+    }
+  }
+}
+
 void CustomTaintChecker::checkGenerators(const CallExpr *CE,
                                          CheckerContext &C) const {
   ProgramStateRef State = C.getState();
@@ -506,13 +542,6 @@ void CustomTaintChecker::checkGenerators(const CallExpr *CE,
       // Mark the given argument.
       State = State->add<TaintArgsOnPostVisit>(ArgNum);
     }
-
-    // If the method is applied over an object, go and visit the method
-    // looking for member/global variables uses and mark them as tainted.
-    if (FDecl->getKind() == Decl::CXXMethod) {
-      WalkAST walkAST(C, C.getState());
-      walkAST.Execute(FDecl->getBody());
-    }
   }
   if (State != C.getState()) {
     debug("In checkGenerators: adding state");
@@ -547,7 +576,7 @@ void CustomTaintChecker::checkFilters(const CallExpr *CE,
   if (Name.empty())
     return;
 
-  for (FILTER::const_iterator I = FilterMap.begin(), E = FilterMap.end();
+  for (FILTER_MAP::const_iterator I = FilterMap.begin(), E = FilterMap.end();
        I != E; ++I) {
     std::pair<std::string, SmallVector<int, SIZE_ARGS>> pair = *I;
     debug("In checkFilters: Checking filter method %s\n", pair.first.data());
@@ -1147,8 +1176,7 @@ bool CustomTaintChecker::generateReportIfTainted(const Expr *E,
 }
 
 NAME_ARGS_PAIR *CustomTaintChecker::getSourceMethodPair(StringRef Name) const {
-  for (SOURCE::const_iterator I = SourceMap.begin(),
-       E = SourceMap.end();
+  for (SOURCE_MAP::const_iterator I = SourceMap.begin(), E = SourceMap.end();
        I != E; ++I) {
     NAME_ARGS_PAIR pair = *I;
     if (Name.equals(pair.first))
@@ -1157,15 +1185,47 @@ NAME_ARGS_PAIR *CustomTaintChecker::getSourceMethodPair(StringRef Name) const {
   return nullptr;
 }
 
-NAME_ARGS_PAIR *CustomTaintChecker::getDestinationMethodPair(StringRef Name) const {
-  for (DESTINATION::const_iterator I = DestinationMap.begin(),
-                                   E = DestinationMap.end();
+NAME_ARGS_PAIR *
+CustomTaintChecker::getDestinationMethodPair(StringRef Name) const {
+  for (DESTINATION_MAP::const_iterator I = DestinationMap.begin(),
+                                       E = DestinationMap.end();
        I != E; ++I) {
     NAME_ARGS_PAIR pair = *I;
     if (Name.equals(pair.first))
       return new NAME_ARGS_PAIR(pair.first, pair.second);
   }
   return nullptr;
+}
+
+bool CustomTaintChecker::IsMemberExpr(Expr *Expr) const {
+  // See if we have to consider something else.
+  if (isa<MemberExpr>(Expr))
+    return true;
+  return false;
+}
+
+bool CustomTaintChecker::HasGlobalStorage(Expr *Expr) const {
+  if (DeclRefExpr *DeclRefEx = dyn_cast<DeclRefExpr>(Expr)) {
+    NamedDecl *NamedDc = DeclRefEx->getFoundDecl();
+    if (VarDecl *VarDc = dyn_cast<VarDecl>(NamedDc)) {
+      if (VarDc->hasGlobalStorage())
+        return true;
+    }
+  }
+  return false;
+}
+
+void CustomTaintChecker::displayWelcome(std::string ConfigFileName,
+                                        std::string DebugFileName) const {
+  llvm::outs().changeColor(llvm::outs().SAVEDCOLOR, true, false);
+  llvm::outs() << "### Custom Taint Checker ###"
+               << "\n";
+  llvm::outs() << "Configuration file: " << ConfigFileName.data() << "\n";
+  llvm::outs() << "Debug file: " << DebugFileName.data() << "\n";
+  llvm::outs() << "\n";
+  llvm::outs().changeColor(llvm::outs().SAVEDCOLOR, false, false);
+
+  debug("\n------Starting checker------\n");
 }
 
 template <typename... Args>

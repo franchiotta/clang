@@ -28,9 +28,9 @@ static const int SIZE_ARGS = 2;
 typedef SmallVector<unsigned, 2> ArgVector;
 typedef std::pair<std::string, SmallVector<int, SIZE_ARGS>> NAME_ARGS_PAIR;
 
-typedef SmallVector<NAME_ARGS_PAIR, SIZE_METHODS> SOURCE;
-typedef SmallVector<NAME_ARGS_PAIR, SIZE_METHODS> DESTINATION;
-typedef SmallVector<NAME_ARGS_PAIR, SIZE_METHODS> FILTER;
+typedef SmallVector<NAME_ARGS_PAIR, SIZE_METHODS> SOURCE_MAP;
+typedef SmallVector<NAME_ARGS_PAIR, SIZE_METHODS> DESTINATION_MAP;
+typedef SmallVector<NAME_ARGS_PAIR, SIZE_METHODS> FILTER_MAP;
 
 ///
 /// \brief Parser class to retrieve configuration taint information from a
@@ -48,7 +48,7 @@ public:
   };
 
   typedef SmallVector<std::pair<std::string, PropagationRule>, SIZE_METHODS>
-      PROPAGATION;
+      PROPAGATION_MAP;
 
   // Constructors
   TaintParser(std::string XMLfilename, std::string XSDfilename);
@@ -65,26 +65,26 @@ public:
   /// \brief Defines a map (string-list of args) which is an association
   /// between generator function names, and its sources arguments.
   ///
-  SOURCE getSourceMap();
+  SOURCE_MAP getSourceMap();
 
   ///
   /// \brief Defines a map (string-list of args) which is an association
   /// between propagation function names, and its source arguments, and
   /// destination arguments.
   ///
-  PROPAGATION getPropagationRuleMap();
+  PROPAGATION_MAP getPropagationRuleMap();
 
   ///
   /// \brief Defines a map (string-list of args) which is an association
   /// between destination function names, and its taget arguments.
   ///
-  DESTINATION getDestinationMap();
+  DESTINATION_MAP getDestinationMap();
 
   ///
   /// \brief Defines a map (string-list of args) which is an association
   /// between sanitizers function names, and its filter arguments.
   ///
-  FILTER getFilterMap();
+  FILTER_MAP getFilterMap();
 
   std::string toString();
 
@@ -94,10 +94,10 @@ private:
   std::string XMLfilename; // Holds the xml configuration filename.
   std::string XSDfilename; // Holds the schema filename.
 
-  SOURCE sourceMap;
-  PROPAGATION propagationRuleMap;
-  DESTINATION destinationMap;
-  FILTER filterMap;
+  SOURCE_MAP sourceMap;
+  PROPAGATION_MAP propagationRuleMap;
+  DESTINATION_MAP destinationMap;
+  FILTER_MAP filterMap;
 
   typedef void (TaintParser::*ResultManager)(xmlNodeSetPtr nodes);
 
