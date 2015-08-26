@@ -28,9 +28,9 @@ TaintParser::TaintParser(std::string XMLfilename, std::string XSDfilename) {
   this->sourceMap =
       SmallVector<std::pair<std::string, SmallVector<int, SIZE_ARGS>>,
                   SIZE_METHODS>();
-  this->propagationRuleMap = PROPAGATION();
-  this->destinationMap = DESTINATION();
-  this->filterMap = FILTER();
+  this->propagationRuleMap = PROPAGATION_MAP();
+  this->destinationMap = DESTINATION_MAP();
+  this->filterMap = FILTER_MAP();
 }
 TaintParser::~TaintParser() {}
 
@@ -307,20 +307,20 @@ bool TaintParser::validateXMLAgaintSchema(xmlDocPtr doc) {
   return false;
 }
 
-SOURCE TaintParser::getSourceMap() { return sourceMap; }
+SOURCE_MAP TaintParser::getSourceMap() { return sourceMap; }
 
-TaintParser::PROPAGATION TaintParser::getPropagationRuleMap() {
+TaintParser::PROPAGATION_MAP TaintParser::getPropagationRuleMap() {
   return propagationRuleMap;
 }
 
-DESTINATION TaintParser::getDestinationMap() { return destinationMap; }
+DESTINATION_MAP TaintParser::getDestinationMap() { return destinationMap; }
 
-FILTER TaintParser::getFilterMap() { return filterMap; }
+FILTER_MAP TaintParser::getFilterMap() { return filterMap; }
 
 std::string TaintParser::toString() {
   std::string str = "Paser {\n";
   str = str + "Sources :\n";
-  for (SOURCE::const_iterator I = sourceMap.begin(), E = sourceMap.end();
+  for (SOURCE_MAP::const_iterator I = sourceMap.begin(), E = sourceMap.end();
        I != E; ++I) {
     std::pair<StringRef, SmallVector<int, SIZE_ARGS>> pair = *I;
     str = str + " - Name: " + pair.first.data() + "\n";
@@ -333,8 +333,8 @@ std::string TaintParser::toString() {
   }
 
   str = str + "Propagation: \n";
-  for (PROPAGATION::const_iterator I = propagationRuleMap.begin(),
-                                   E = propagationRuleMap.end();
+  for (PROPAGATION_MAP::const_iterator I = propagationRuleMap.begin(),
+                                       E = propagationRuleMap.end();
        I != E; ++I) {
     std::pair<std::string, PropagationRule> pair = *I;
     str = str + " - Name: " + pair.first.data() + "\n";
@@ -355,8 +355,8 @@ std::string TaintParser::toString() {
   }
 
   str = str + "Destinations: \n";
-  for (DESTINATION::const_iterator I = destinationMap.begin(),
-                                   E = destinationMap.end();
+  for (DESTINATION_MAP::const_iterator I = destinationMap.begin(),
+                                       E = destinationMap.end();
        I != E; ++I) {
     std::pair<StringRef, SmallVector<int, SIZE_ARGS>> pair = *I;
     str = str + " - Name: " + pair.first.data() + "\n";
@@ -369,7 +369,7 @@ std::string TaintParser::toString() {
   }
 
   str = str + "Filters:\n";
-  for (FILTER::const_iterator I = filterMap.begin(), E = filterMap.end();
+  for (FILTER_MAP::const_iterator I = filterMap.begin(), E = filterMap.end();
        I != E; ++I) {
     std::pair<StringRef, SmallVector<int, SIZE_ARGS>> pair = *I;
     str = str + " - Name: " + pair.first.data() + "\n";
