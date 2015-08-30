@@ -27,6 +27,7 @@ add_clang_library(clangStaticAnalyzerCheckers
   CustomTaintChecker.cpp
   TaintParser.cpp
   TaintVisitor.cpp
+  TaintUtil.cpp
   DeadStoresChecker.cpp
   DebugCheckers.cpp
   DereferenceChecker.cpp

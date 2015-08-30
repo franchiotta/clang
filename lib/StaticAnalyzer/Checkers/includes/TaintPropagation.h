@@ -14,6 +14,9 @@
 
 #include "clang/StaticAnalyzer/Core/PathSensitive/CheckerContext.h"
 
+using namespace clang;
+using namespace ento;
+
 namespace taintutil {
 
 typedef SmallVector<unsigned, 2> ArgVector;
