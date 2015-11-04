@@ -12,6 +12,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "includes/TaintExpression.h"
 #include "llvm/ADT/MapVector.h"
 
 #include <libxml/xpath.h>
@@ -23,14 +24,11 @@ using namespace llvm;
 namespace taintutil {
 
 static const int SIZE_METHODS = 5;
-static const int SIZE_ARGS = 2;
 
-typedef SmallVector<unsigned, 2> ArgVector;
-typedef std::pair<std::string, SmallVector<int, SIZE_ARGS>> NAME_ARGS_PAIR;
-
-typedef SmallVector<NAME_ARGS_PAIR, SIZE_METHODS> SOURCE_MAP;
-typedef SmallVector<NAME_ARGS_PAIR, SIZE_METHODS> DESTINATION_MAP;
-typedef SmallVector<NAME_ARGS_PAIR, SIZE_METHODS> FILTER_MAP;
+typedef SmallVector<Source, SIZE_METHODS> SourceList;
+typedef SmallVector<Propagator, SIZE_METHODS> PropagationList;
+typedef SmallVector<Sink, SIZE_METHODS> DestinationList;
+typedef SmallVector<Filter, SIZE_METHODS> FilterList;
 
 ///
 /// \brief Parser class to retrieve configuration taint information from a
@@ -39,17 +37,6 @@ typedef SmallVector<NAME_ARGS_PAIR, SIZE_METHODS> FILTER_MAP;
 ///
 class TaintParser {
 public:
-  struct PropagationRule {
-    ArgVector SrcArgs;
-    ArgVector DstArgs;
-
-    inline void addSrcArg(unsigned A) { SrcArgs.push_back(A); }
-    inline void addDstArg(unsigned A) { DstArgs.push_back(A); }
-  };
-
-  typedef SmallVector<std::pair<std::string, PropagationRule>, SIZE_METHODS>
-      PROPAGATION_MAP;
-
   // Constructors
   TaintParser(std::string XMLfilename, std::string XSDfilename);
 
@@ -62,29 +49,29 @@ public:
   short process();
 
   ///
-  /// \brief Defines a map (string-list of args) which is an association
-  /// between generator function names, and its sources arguments.
+  /// \brief Defines a list of Sources, which is an association between
+  /// generator function names, and its sources arguments.
   ///
-  SOURCE_MAP getSourceMap();
+  SourceList getSourceList();
 
   ///
-  /// \brief Defines a map (string-list of args) which is an association
-  /// between propagation function names, and its source arguments, and
-  /// destination arguments.
+  /// \brief Defines a list of Propagators, which is an association between
+  /// propagation function names, and its source arguments, and destination
+  /// arguments.
   ///
-  PROPAGATION_MAP getPropagationRuleMap();
+  PropagationList getPropagationRuleList();
 
   ///
-  /// \brief Defines a map (string-list of args) which is an association
-  /// between destination function names, and its taget arguments.
+  /// \brief Defines a list of Sinks, which is an association between
+  /// destination function names, and its taget arguments.
   ///
-  DESTINATION_MAP getDestinationMap();
+  DestinationList getDestinationList();
 
   ///
-  /// \brief Defines a map (string-list of args) which is an association
-  /// between sanitizers function names, and its filter arguments.
+  /// \brief Defines a list of Filters, which is an association between
+  /// sanitizers function names, and its filter arguments.
   ///
-  FILTER_MAP getFilterMap();
+  FilterList getFilterList();
 
   std::string toString();
 
@@ -94,10 +81,10 @@ private:
   std::string XMLfilename; // Holds the xml configuration filename.
   std::string XSDfilename; // Holds the schema filename.
 
-  SOURCE_MAP sourceMap;
-  PROPAGATION_MAP propagationRuleMap;
-  DESTINATION_MAP destinationMap;
-  FILTER_MAP filterMap;
+  SourceList sourceList;
+  PropagationList propagationRuleList;
+  DestinationList destinationList;
+  FilterList filterList;
 
   typedef void (TaintParser::*ResultManager)(xmlNodeSetPtr nodes);
 

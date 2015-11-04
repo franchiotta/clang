@@ -12,6 +12,8 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "clang/AST/ExprCXX.h"
+#include "clang/AST/DeclCXX.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/CheckerContext.h"
 
 using namespace clang;
@@ -27,7 +29,7 @@ bool isFDApplicable(const FunctionDecl *FD);
 SymbolRef getPointedToSymbol(CheckerContext &C, const Expr *Arg);
 
 SymbolRef getSymbol(SVal Val);
-  
+
 bool isMemberExpr(Expr *Expr);
 
 bool hasGlobalStorage(Expr *Expr);
@@ -37,6 +39,8 @@ std::string exprToString(const Expr *E);
 void displayWelcome(std::string ConfigFileName, std::string DebugFileName);
 
 std::string replaceMessage(const char *MsgTemplate, const char *MsgToComplete);
+
+std::string getCallExpCalleeType(const CallExpr *CE, CheckerContext &C);
 
 template <typename... Args>
 void debug(FILE *DebugFile, const char *Format, Args... Arguments) {
@@ -64,10 +68,84 @@ public:
     ID.AddPointer(&X);
     ID.AddPointer(Symbol);
   }
-  
+
   PathDiagnosticPiece *VisitNode(const ExplodedNode *N,
                                  const ExplodedNode *PrevN,
                                  BugReporterContext &BRC,
                                  BugReport &BR) override;
+};
+
+//
+// Class used to hold call information between callbacks. Currently, it is being
+// used to share the callee type between checkPreStmt and CheckBin callbacks.
+//
+class CallInfo {
+public:
+  std::string Name;
+  std::string CalleeType;
+
+  CallInfo(std::string Name, std::string CalleeType)
+      : Name(Name), CalleeType(CalleeType) {}
+
+  inline bool operator==(const CallInfo &That) const {
+    return (this->Name == That.Name && this->CalleeType == That.CalleeType);
+  }
+  
+  inline bool operator<(const CallInfo &That) const {
+    return this->Name < That.Name;
+  }
+  
+  void Profile(llvm::FoldingSetNodeID &ID) const {
+    ID.AddString(Name);
+    ID.AddString(CalleeType);
+  }
+};
+
+//
+// Class used to hold taint information between pre and post checks callbacks.
+// It contains the arguments to the call to be tainted or filtered.
+//
+class TaintInfo {
+public:
+  enum class Operation { TAINT, UNTAINT };
+  
+private:
+  int Id; // Used just for the profile.
+  std::string Name;
+  enum Operation Op;
+  SmallVector<unsigned, 2> Arguments;
+
+public:
+  TaintInfo() {}
+  
+  TaintInfo(std::string Name, enum Operation Op) : Name(Name), Op(Op) {
+    Arguments = SmallVector<unsigned, 2>();
+  }
+
+  TaintInfo(std::string Name, enum Operation Op, SmallVector<unsigned, 2> Args)
+  : Name(Name), Op(Op), Arguments(Args){}
+  
+  inline bool operator==(const TaintInfo &That) const {
+    return this->Name == That.Name  && this->Op == That.Op;
+  }
+
+  inline bool operator<(const TaintInfo &That) const {
+    return this->Name < That.Name;
+  }
+
+  std::string getName() const {return Name;}
+  
+  enum Operation getOperation() const {return Op;}
+  
+  SmallVector<unsigned, 2> getArguments() const {return Arguments;}
+  
+  void addArgument(unsigned Argument) { Arguments.push_back(Argument); }
+  
+  bool empty() const { return Arguments.empty(); }
+  
+  void Profile(llvm::FoldingSetNodeID &ID) const {
+    ID.AddString(Name);
+    ID.AddPointer(&Id);
+  }
 };
 };

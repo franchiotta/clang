@@ -19,8 +19,6 @@ using namespace ento;
 
 namespace taintutil {
 
-typedef SmallVector<unsigned, 2> ArgVector;
-
 const unsigned ReturnValueIndex = 100;
 const unsigned InvalidArgIndex = 101;
 

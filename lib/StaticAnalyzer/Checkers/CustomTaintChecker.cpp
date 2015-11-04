@@ -14,8 +14,7 @@
 // aggressively, even if the involved symbols are under constrained.
 //
 // This checker is based on GenericTaintChecker, but it adds custom
-// configuration
-// for the checker retrieved from a xml resource.
+// configuration to the checker from a xml resource.
 //
 //===----------------------------------------------------------------------===//
 
@@ -27,15 +26,12 @@
 #include "ClangSACheckers.h"
 #include "clang/Config/config.h"
 #include "clang/Basic/Builtins.h"
-#include "clang/AST/StmtVisitor.h"
 #include "clang/StaticAnalyzer/Core/Checker.h"
 #include "clang/StaticAnalyzer/Core/CheckerManager.h"
 #include "clang/StaticAnalyzer/Core/BugReporter/BugType.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/TaintTag.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/CheckerContext.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/ProgramStateTrait.h"
-
-#include "llvm/ADT/MapVector.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <climits>
@@ -52,8 +48,8 @@ using namespace ento;
 using namespace taintutil;
 namespace {
 
-// File used to write debug information(its path is passed by parameter to the
-// checker).
+// File used to write debug information (its path is passed by the user as a
+// parameter to the checker).
 static FILE *DebugFile;
 
 // Location of configuration schema used to validate the configuration file
@@ -113,6 +109,13 @@ private:
   /// \brief Add taint sources on a pre-visit.
   void addSourcesPre(const CallExpr *CE, CheckerContext &C) const;
 
+  /// \brief Clear Call Info stored at pre-visit if there is any.
+  void clearCallInfo(const CallExpr *CE, CheckerContext &C) const;
+
+  /// \brief Remove call information from UpperCallInfo registered set.
+  ProgramStateRef removeCallInfo(ProgramStateRef State,
+                                 std::string CallName) const;
+
   /// \brief Propagate taint generated at pre-visit.
   bool propagateFromPre(const CallExpr *CE, CheckerContext &C) const;
 
@@ -121,12 +124,12 @@ private:
   bool propagateFilterFromPre(const CallExpr *CE, CheckerContext &C) const;
 
   /// \brief Add taint sources on a post visit.
-  void addSourcesPost(const CallExpr *CE, CheckerContext &C) const;
+  bool addSourcesPost(const CallExpr *CE, CheckerContext &C) const;
 
-  // TODO: write a meaningful comment
-  ProgramStateRef taintMemberAndGlobalVars(const FunctionDecl *FD, SVal Val,
-                                           const Stmt *S, ProgramStateRef State,
-                                           CheckerContext &C) const;
+  /// \brief taints member or global variables in the left hand side of an
+  /// assignment.
+  ProgramStateRef taintMemberAndGlobalVars(SVal Val, const Stmt *S,
+                                           ProgramStateRef State) const;
 
   /// Check if the region the expression evaluates to is the standard input,
   /// and thus, is tainted.
@@ -172,17 +175,8 @@ private:
   bool generateReportIfTainted(const Expr *E, const char Msg[],
                                CheckerContext &C) const;
 
-  bool isSourceMethod(StringRef Name) const;
-
-  bool isArgumentOnSourceConf(StringRef Name, int ArgNum) const;
-
-  NAME_ARGS_PAIR *getSourceMethodPair(StringRef Name) const;
-
-  NAME_ARGS_PAIR *getDestinationMethodPair(StringRef Name) const;
-
-  bool EmitReportTaintedOnDestination(const Expr *Expr, const char Msg[],
-                                      CheckerContext &C,
-                                      SymbolRef Symbol) const;
+  /// Set configuration to checker from taint parser.
+  void setConfiguration(TaintParser TP) const;
 
   class TaintPropagationRule : public TaintPropagation {
   public:
@@ -203,13 +197,31 @@ private:
                                                   CheckerContext &C);
   };
 
+  bool isSourceExpression(StringRef Name, StringRef CalleeType) const;
+
+  Source *getSourceExpression(StringRef Name, StringRef CalleeType) const;
+
+  TaintPropagationRule getPropagatorExpression(StringRef Name,
+                                               StringRef CalleeType) const;
+
+  Sink *getDestinationExpression(StringRef Name, StringRef CalleeType) const;
+
+  Filter *getFilterExpression(StringRef Name, StringRef CalleeType) const;
+
+  TaintInfo *getTaintInfo(ProgramStateRef State, std::string Name,
+                         enum TaintInfo::Operation Op) const;
+
+  CallInfo *getCallInfo(ProgramStateRef State, std::string Name) const;
+
+  bool EmitReportTaintedOnDestination(const Expr *Expr, const char Msg[],
+                                      CheckerContext &C,
+                                      SymbolRef Symbol) const;
+
   /// Get the propagation rule for a given function.
   TaintPropagationRule getTaintPropagationRule(const FunctionDecl *FDecl,
                                                StringRef Name,
+                                               StringRef CalleType,
                                                CheckerContext &C) const;
-
-  typedef std::pair<std::string, TaintPropagationRule> NAMEPROPAGATIONPAIR;
-  typedef SmallVector<NAMEPROPAGATIONPAIR, SIZE_METHODS> PROPAGATION_MAP;
 
   //
   // Variables for holding information retrieved from xml configuration files.
@@ -217,48 +229,48 @@ private:
   // This checker defines four kind of functions:
   // - Generators (or sources): methods that can introduce taint data to
   // variables (or to object in which the functions are applied to).
-  // - Propagations: methods that can propagate taint data to other to other
-  // variables.
-  // - Destinations (or targets): methods that can have dangerous behaviour if
+  // - Propagations: methods that can propagate taint data to other variables.
+  // - Destinations (or sinks): methods that can have dangerous behaviour if
   // taint data is passed on.
   // - Filters (or sanitizers): methods that sanitize taint variables.
   //
 
   ///
-  /// \brief Defines a map (string-list of args) which is an association
-  /// between generator function names, and its sources arguments.
+  /// \brief Defines a list of Sources, which is an association between
+  /// generator function names, and its sources arguments.
   ///
-  static SOURCE_MAP SourceMap;
+  static SourceList SourceList;
 
   ///
-  /// \brief Defines a map (string-list of args) which is an association
-  /// between propagation function names, and its source arguments, and
-  /// destination arguments.
+  /// \brief Defines a list of propagators, which is an association between
+  /// propagation function names, and its source arguments, and destination
+  /// arguments.
   ///
-  static PROPAGATION_MAP PropagationRuleMap;
+  static PropagationList PropagationRuleList;
 
   ///
-  /// \brief Defines a map (string-list of args) which is an association
-  /// between destination function names, and its taget arguments.
+  /// \brief Defines a list of Sinks, which is an association between
+  /// destination function names, and its taget arguments.
   ///
-  static DESTINATION_MAP DestinationMap;
+  static DestinationList DestinationList;
 
   ///
-  /// \brief Defines a map (string-list of args) which is an association
-  /// between sanitizers function names, and its filter arguments.
+  /// \brief Defines a list of Filters, which is an association between
+  /// sanitizers function names, and its filter arguments.
   ///
-  static FILTER_MAP FilterMap;
+  static FilterList FilterList;
 
 }; // End of CustomTaintChecker
 
-SOURCE_MAP CustomTaintChecker::SourceMap = SOURCE_MAP();
+SourceList CustomTaintChecker::SourceList = taintutil::SourceList();
 
-CustomTaintChecker::PROPAGATION_MAP CustomTaintChecker::PropagationRuleMap =
-    PROPAGATION_MAP();
+PropagationList CustomTaintChecker::PropagationRuleList =
+    taintutil::PropagationList();
 
-DESTINATION_MAP CustomTaintChecker::DestinationMap = DESTINATION_MAP();
+DestinationList CustomTaintChecker::DestinationList =
+    taintutil::DestinationList();
 
-FILTER_MAP CustomTaintChecker::FilterMap = FILTER_MAP();
+FilterList CustomTaintChecker::FilterList = taintutil::FilterList();
 
 const char CustomTaintChecker::MsgUncontrolledFormatString[] =
     "Untrusted data is used as a format string "
@@ -281,16 +293,19 @@ const char CustomTaintChecker::MsgTaintedBufferSize[] =
 
 } // End of anonymous namespace
 
-/// Sets which are used to pass information from call pre-visit instruction
-/// to the call post-visit. The values are unsigned integers, which are either
+/// Set which is used to pass information from call pre-visit instruction
+/// to the call post-visit. The values are TaintInfo objects, whose fields are
+/// the name of the call and a list of unsigned integers, which are either
 /// ReturnValueIndex, or indexes of the pointer/reference argument, which
 /// points to data, which should be tainted on return.
-REGISTER_SET_WITH_PROGRAMSTATE(TaintArgsOnPostVisit, unsigned)
-REGISTER_SET_WITH_PROGRAMSTATE(UntaintArgsOnPostVisit, unsigned)
+REGISTER_SET_WITH_PROGRAMSTATE(TaintArgsOnPostVisit, TaintInfo)
+// The UpperCallInfo set is mainly used to pass the CalleeType from the
+// CheckPreStmt to checkBind callback.
+REGISTER_SET_WITH_PROGRAMSTATE(UpperCallInfo, CallInfo)
 
 CustomTaintChecker::TaintPropagationRule
 CustomTaintChecker::getTaintPropagationRule(const FunctionDecl *FDecl,
-                                            StringRef Name,
+                                            StringRef Name, StringRef CalleType,
                                             CheckerContext &C) const {
   // TODO: Currently, we might lose precision here: we always mark a return
   // value as tainted even if it's just a pointer, pointing to tainted data.
@@ -318,18 +333,11 @@ CustomTaintChecker::getTaintPropagationRule(const FunctionDecl *FDecl,
           .Case("fgetln", TaintPropagationRule(0, ReturnValueIndex))
           .Default(TaintPropagationRule());
 
-  // If the previous case did not find a Propagation Rule for the method, now it
-  // has to check the custom rules defined by the user.
   if (Rule.isNull()) {
-    for (PROPAGATION_MAP::const_iterator I = PropagationRuleMap.begin(),
-                                         E = PropagationRuleMap.end();
-         I != E; ++I) {
-      std::pair<std::string, TaintPropagationRule> pair = *I;
-      if (Name.equals(pair.first))
-        Rule = pair.second;
-    }
+    // If the previous case did not find a Propagation Rule for the method, now
+    // it has to check the custom rules defined by the user.
+    Rule = getPropagatorExpression(Name, CalleType);
   }
-
   if (!Rule.isNull())
     return Rule;
 
@@ -395,25 +403,7 @@ void CustomTaintChecker::initialization(std::string ConfigurationFilePath,
   int result;
   if ((result = parser.process()) == 0) {
     // Getting taint configuration data from TaintParser object.
-    SourceMap = parser.getSourceMap();
-    TaintParser::PROPAGATION_MAP propagationRule =
-        parser.getPropagationRuleMap();
-
-    for (TaintParser::PROPAGATION_MAP::const_iterator I =
-             propagationRule.begin(),
-                                                      E = propagationRule.end();
-         I != E; ++I) {
-      std::pair<std::string, TaintParser::PropagationRule> pair = *I;
-
-      TaintPropagationRule taintPropagationRule = TaintPropagationRule();
-      taintPropagationRule.setSrcArg(pair.second.SrcArgs);
-      taintPropagationRule.setDstArg(pair.second.DstArgs);
-      PropagationRuleMap.push_back(
-          NAMEPROPAGATIONPAIR(pair.first, taintPropagationRule));
-    }
-
-    DestinationMap = parser.getDestinationMap();
-    FilterMap = parser.getFilterMap();
+    setConfiguration(parser);
     debug(DebugFile, parser.toString().data());
   } else {
     // An error occurred trying to parse configuration file.
@@ -454,12 +444,17 @@ void CustomTaintChecker::checkPostStmt(const CallExpr *CE,
     return;
   if (propagateFilterFromPre(CE, C))
     return;
-  addSourcesPost(CE, C);
+  if (addSourcesPost(CE, C))
+    return;
+
+  // If none of the previous methods added a new transition, clear the call info
+  // from the State (Note: if they did add a transition, it means that they
+  // already cleared it).
+  clearCallInfo(CE, C);
 }
 
 void CustomTaintChecker::checkBind(SVal Loc, SVal Val, const Stmt *S,
                                    CheckerContext &C) const {
-
   const Decl *D = C.getCurrentAnalysisDeclContext()->getDecl();
   if (!D)
     return;
@@ -469,13 +464,29 @@ void CustomTaintChecker::checkBind(SVal Loc, SVal Val, const Stmt *S,
   if (!FD)
     return;
 
+  StringRef Name = FD->getNameInfo().getName().getAsString();
   ProgramStateRef State = C.getState();
+  // Verify if the checkPreStmt for the upper ExprCall stored any call
+  // information.
+  const CallInfo *CallInfo = getCallInfo(State, Name);
+  if (!CallInfo)
+    return;
 
-  // TODO: write a meaningful comment
-  State = taintMemberAndGlobalVars(FD, Val, S, State, C);
+  // If the FunctionDecl name is a valid source expression, it continues.
+  // Otherwise, it ends.
+  if (!isSourceExpression(Name, CallInfo->CalleeType)) {
+    delete CallInfo;
+    return;
+  }
 
-  if (State != C.getState())
+  // If the statement 'S' is an assignment, taint the left hand side if it is a
+  // member or global variable.
+  State = taintMemberAndGlobalVars(Val, S, State);
+
+  if (State != C.getState()) {
     C.addTransition(State);
+  }
+  delete CallInfo;
 }
 
 bool CustomTaintChecker::checkPre(const CallExpr *CE, CheckerContext &C) const {
@@ -488,10 +499,10 @@ bool CustomTaintChecker::checkPre(const CallExpr *CE, CheckerContext &C) const {
   StringRef Name = C.getCalleeName(FDecl);
 
   if (!isFDApplicable(FDecl))
-    return false;
+    return true;
 
   if (Name.empty())
-    return false;
+    return true;
 
   if (checkCustomDestination(CE, Name, C))
     return true;
@@ -511,17 +522,17 @@ void CustomTaintChecker::checkGenerators(const CallExpr *CE,
                                          CheckerContext &C) const {
   ProgramStateRef State = C.getState();
   const FunctionDecl *FDecl = C.getCalleeDecl(CE);
-  if (!isFDApplicable(FDecl))
-    return;
-
   StringRef Name = C.getCalleeName(FDecl);
-  if (Name.empty())
-    return;
+  StringRef CalleeType = getCallExpCalleeType(CE, C);
+  if (Source *Source = getSourceExpression(Name, CalleeType)) {
+    // This set is used to communicate checPreStmt with checkBind callbacks.
+    // Here we are storing the call information such as its Name and its Callee
+    // type, so we can have that knowledge in checkBind.
+    State = State->add<UpperCallInfo>(CallInfo(Name, CalleeType));
 
-  if (NAME_ARGS_PAIR *Pair = getSourceMethodPair(Name)) {
-    for (llvm::SmallVector<int, SIZE_ARGS>::const_iterator
-             J = Pair->second.begin(),
-             Z = Pair->second.end();
+    TaintInfo TI = TaintInfo(Name, TaintInfo::Operation::TAINT);
+    for (ArgVector::const_iterator J = Source->getArgs().begin(),
+                                   Z = Source->getArgs().end();
          J != Z; ++J) {
 
       unsigned ArgNum = *J;
@@ -539,14 +550,14 @@ void CustomTaintChecker::checkGenerators(const CallExpr *CE,
           QualType PType = ArgTy->getPointeeType();
           if ((!PType.isNull() && !PType.isConstQualified()) ||
               (ArgTy->isReferenceType() && !Arg->getType().isConstQualified()))
-            State = State->add<TaintArgsOnPostVisit>(i);
+            TI.addArgument(i);
         }
         continue;
       }
 
       // Should mark the return value?
       if (ArgNum == ReturnValueIndex) {
-        State = State->add<TaintArgsOnPostVisit>(ReturnValueIndex);
+        TI.addArgument(ReturnValueIndex);
         continue;
       }
 
@@ -555,9 +566,11 @@ void CustomTaintChecker::checkGenerators(const CallExpr *CE,
         continue;
 
       // Mark the given argument.
-      State = State->add<TaintArgsOnPostVisit>(ArgNum);
+      TI.addArgument(ArgNum);
     }
-    delete Pair;
+    if (!TI.empty())
+      State = State->add<TaintArgsOnPostVisit>(TI);
+    delete Source;
   }
   if (State != C.getState())
     C.addTransition(State);
@@ -566,14 +579,16 @@ void CustomTaintChecker::checkGenerators(const CallExpr *CE,
 bool CustomTaintChecker::checkCustomDestination(const CallExpr *CE,
                                                 StringRef Name,
                                                 CheckerContext &C) const {
-  if (NAME_ARGS_PAIR *pair = getDestinationMethodPair(Name)) {
-    for (SmallVector<int, SIZE_ARGS>::const_iterator I = pair->second.begin(),
-                                                     E = pair->second.end();
+  if (Sink *Sink =
+          getDestinationExpression(Name, getCallExpCalleeType(CE, C))) {
+    for (ArgVector::const_iterator I = Sink->getArgs().begin(),
+                                   E = Sink->getArgs().end();
          I != E; ++I) {
       int ArgNum = *I;
       if (generateReportIfTainted(CE->getArg(ArgNum), MsgSanitizeArgs, C))
         return true;
     }
+    delete Sink;
   }
   return false;
 }
@@ -582,32 +597,25 @@ void CustomTaintChecker::checkFilters(const CallExpr *CE,
                                       CheckerContext &C) const {
   ProgramStateRef State = C.getState();
   const FunctionDecl *FDecl = C.getCalleeDecl(CE);
-  if (!isFDApplicable(FDecl))
-    return;
-
   StringRef Name = C.getCalleeName(FDecl);
-  if (Name.empty())
-    return;
 
-  for (FILTER_MAP::const_iterator I = FilterMap.begin(), E = FilterMap.end();
-       I != E; ++I) {
-    std::pair<std::string, SmallVector<int, SIZE_ARGS>> pair = *I;
-    if (Name.equals(pair.first)) {
-      for (llvm::SmallVector<int, SIZE_ARGS>::const_iterator
-               J = pair.second.begin(),
-               Z = pair.second.end();
-           J != Z; ++J) {
+  if (Filter *Filter = getFilterExpression(Name, getCallExpCalleeType(CE, C))) {
+    TaintInfo TI = TaintInfo(Name, TaintInfo::Operation::UNTAINT);
+    for (ArgVector::const_iterator J = Filter->getArgs().begin(),
+                                   Z = Filter->getArgs().end();
+         J != Z; ++J) {
+      unsigned ArgNum = *J;
 
-        unsigned ArgNum = *J;
+      // assert(ArgNum >= 0 && ArgNum < CE->getNumArgs());
+      if (ArgNum >= CE->getNumArgs())
+        break;
 
-        // assert(ArgNum >= 0 && ArgNum < CE->getNumArgs());
-        if (ArgNum >= CE->getNumArgs())
-          break;
-
-        // Mark the given argument.
-        State = State->add<UntaintArgsOnPostVisit>(ArgNum);
-      }
+      // Mark the given argument.
+      TI.addArgument(ArgNum);
     }
+    if (!TI.empty())
+      State = State->add<TaintArgsOnPostVisit>(TI);
+    delete Filter;
   }
   if (State != C.getState())
     C.addTransition(State);
@@ -617,15 +625,12 @@ void CustomTaintChecker::addSourcesPre(const CallExpr *CE,
                                        CheckerContext &C) const {
   ProgramStateRef State = nullptr;
   const FunctionDecl *FDecl = C.getCalleeDecl(CE);
-  if (!isFDApplicable(FDecl))
-    return;
-
   StringRef Name = C.getCalleeName(FDecl);
-  if (Name.empty())
-    return;
+  StringRef CalleeType = getCallExpCalleeType(CE, C);
 
   // First, try generating a propagation rule for this function.
-  TaintPropagationRule Rule = getTaintPropagationRule(FDecl, Name, C);
+  TaintPropagationRule Rule =
+      getTaintPropagationRule(FDecl, Name, CalleeType, C);
   if (!Rule.isNull()) {
     State = Rule.process(CE, C);
     if (!State)
@@ -646,20 +651,53 @@ void CustomTaintChecker::addSourcesPre(const CallExpr *CE,
   C.addTransition(State);
 }
 
+void CustomTaintChecker::clearCallInfo(const CallExpr *CE,
+                                       CheckerContext &C) const {
+  ProgramStateRef State = C.getState();
+
+  // Getting call name.
+  const FunctionDecl *FDecl = C.getCalleeDecl(CE);
+  StringRef Name = C.getCalleeName(FDecl);
+
+  State = removeCallInfo(State, Name);
+  if (State != C.getState()) {
+    C.addTransition(State, C.getPredecessor());
+  }
+}
+
+ProgramStateRef CustomTaintChecker::removeCallInfo(ProgramStateRef State,
+                                                   std::string CallName) const {
+  UpperCallInfoTy CallInfoList = State->get<UpperCallInfo>();
+  for (llvm::ImmutableSet<CallInfo>::iterator I = CallInfoList.begin(),
+                                              E = CallInfoList.end();
+       I != E; ++I) {
+    CallInfo CI = *I;
+    if (CI.Name == CallName) {
+      return State->remove<UpperCallInfo>(CI);
+    }
+  }
+  return State;
+}
+
 bool CustomTaintChecker::propagateFromPre(const CallExpr *CE,
                                           CheckerContext &C) const {
 
   ProgramStateRef State = C.getState();
 
+  // Getting call name.
+  const FunctionDecl *FDecl = C.getCalleeDecl(CE);
+  StringRef Name = C.getCalleeName(FDecl);
+
   // Depending on what was tainted at pre-visit, we determined a set of
   // arguments which should be tainted after the function returns. These are
   // stored in the state as TaintArgsOnPostVisit set.
-  TaintArgsOnPostVisitTy TaintArgs = State->get<TaintArgsOnPostVisit>();
-  if (TaintArgs.isEmpty())
+  const TaintInfo *TaintInfo =
+      getTaintInfo(State, Name, TaintInfo::Operation::TAINT);
+  if (!TaintInfo)
     return false;
 
-  for (llvm::ImmutableSet<unsigned>::iterator I = TaintArgs.begin(),
-                                              E = TaintArgs.end();
+  const ArgVector Arguments = TaintInfo->getArguments();
+  for (ArgVector::const_iterator I = Arguments.begin(), E = Arguments.end();
        I != E; ++I) {
     unsigned ArgNum = *I;
 
@@ -672,18 +710,18 @@ bool CustomTaintChecker::propagateFromPre(const CallExpr *CE,
     // The arguments are pointer arguments. The data they are pointing at is
     // tainted after the call.
     if (CE->getNumArgs() < (ArgNum + 1))
-      return false;
+      continue;
 
     const Expr *Arg = CE->getArg(ArgNum);
     SymbolRef Sym = getPointedToSymbol(C, Arg);
     if (Sym)
       State = State->addTaint(Sym);
   }
-
   // Clear up the taint info from the state.
-  State = State->remove<TaintArgsOnPostVisit>();
-
+  State = State->remove<TaintArgsOnPostVisit>(*TaintInfo);
+  delete TaintInfo;
   if (State != C.getState()) {
+    State = removeCallInfo(State, Name);
     C.addTransition(State);
     return true;
   }
@@ -695,15 +733,20 @@ bool CustomTaintChecker::propagateFilterFromPre(const CallExpr *CE,
 
   ProgramStateRef State = C.getState();
 
-  // Depending on what was tainted at pre-visit, we determined a set of
-  // arguments which should be tainted after the function returns. These are
+  // Getting call name.
+  const FunctionDecl *FDecl = C.getCalleeDecl(CE);
+  StringRef Name = C.getCalleeName(FDecl);
+
+  // Depending on what was untainted at pre-visit, we determined a set of
+  // arguments which should be filtered after the function returns. These are
   // stored in the state as TaintArgsOnPostVisit set.
-  UntaintArgsOnPostVisitTy UntaintArgs = State->get<UntaintArgsOnPostVisit>();
-  if (UntaintArgs.isEmpty())
+  const TaintInfo *UntaintInfo =
+      getTaintInfo(State, Name, TaintInfo::Operation::UNTAINT);
+  if (!UntaintInfo)
     return false;
 
-  for (llvm::ImmutableSet<unsigned>::iterator I = UntaintArgs.begin(),
-                                              E = UntaintArgs.end();
+  const ArgVector Arguments = UntaintInfo->getArguments();
+  for (ArgVector::const_iterator I = Arguments.begin(), E = Arguments.end();
        I != E; ++I) {
     unsigned ArgNum = *I;
 
@@ -716,7 +759,7 @@ bool CustomTaintChecker::propagateFilterFromPre(const CallExpr *CE,
     // The arguments are pointer arguments. The data they are pointing at is
     // tainted after the call.
     if (CE->getNumArgs() < (ArgNum + 1))
-      return false;
+      continue;
 
     const Expr *Arg = CE->getArg(ArgNum);
     State = State->removeTaint(Arg, C.getLocationContext());
@@ -726,26 +769,28 @@ bool CustomTaintChecker::propagateFilterFromPre(const CallExpr *CE,
   }
 
   // Clear up the taint info from the state.
-  State = State->remove<UntaintArgsOnPostVisit>();
-
+  State = State->remove<TaintArgsOnPostVisit>(*UntaintInfo);
+  delete UntaintInfo;
   if (State != C.getState()) {
+    // Also clear the call info from the state.
+    State = removeCallInfo(State, Name);
     C.addTransition(State);
     return true;
   }
   return false;
 }
 
-void CustomTaintChecker::addSourcesPost(const CallExpr *CE,
+bool CustomTaintChecker::addSourcesPost(const CallExpr *CE,
                                         CheckerContext &C) const {
   // Define the attack surface.
   // Set the evaluation function by switching on the callee name.
   const FunctionDecl *FDecl = C.getCalleeDecl(CE);
   if (!isFDApplicable(FDecl))
-    return;
+    return false;
 
   StringRef Name = C.getCalleeName(FDecl);
   if (Name.empty())
-    return;
+    return false;
   FnCheck evalFunction =
       llvm::StringSwitch<FnCheck>(Name)
           .Case("scanf", &CustomTaintChecker::postScanf)
@@ -767,26 +812,24 @@ void CustomTaintChecker::addSourcesPost(const CallExpr *CE,
   if (evalFunction)
     State = (this->*evalFunction)(CE, C);
   if (!State)
-    return;
+    return false;
 
+  // Also clear the call info from the state.
+  State = removeCallInfo(State, Name);
   C.addTransition(State);
+  return true;
 }
 
-ProgramStateRef CustomTaintChecker::taintMemberAndGlobalVars(
-    const FunctionDecl *FD, SVal Val, const Stmt *S, ProgramStateRef State,
-    CheckerContext &C) const {
-  // If the FunctionDecl name is one of the sources, it continues. Otherwise,
-  // it finishes.
-  StringRef Name = FD->getNameInfo().getName().getAsString();
-  if (!isSourceMethod(Name))
-    return State;
+ProgramStateRef
+CustomTaintChecker::taintMemberAndGlobalVars(SVal Val, const Stmt *S,
+                                             ProgramStateRef State) const {
 
-  // It just cares about binary operations(specifically assignments).
+  // It just cares about binary operations(particulary assignments).
   const BinaryOperator *BO = dyn_cast<BinaryOperator>(S);
   if (!BO || !BO->isAssignmentOp())
     return State;
 
-  Expr *Lhs = BO->getLHS(); // Getting the left hand side of the assignment.
+  Expr *Lhs = BO->getLHS();
   if (isMemberExpr(Lhs) || hasGlobalStorage(Lhs)) {
     SymbolRef Symbol = Val.getAsSymbol();
     if (Symbol) {
@@ -874,6 +917,11 @@ CustomTaintChecker::TaintPropagationRule::process(const CallExpr *CE,
   if (!IsTainted)
     return State;
 
+  // Getting call name.
+  const FunctionDecl *FDecl = C.getCalleeDecl(CE);
+  StringRef Name = C.getCalleeName(FDecl);
+  
+  TaintInfo TI = TaintInfo(Name, TaintInfo::Operation::TAINT);
   // Mark the arguments which should be tainted after the function returns.
   for (ArgVector::const_iterator I = DstArgs.begin(), E = DstArgs.end(); I != E;
        ++I) {
@@ -892,14 +940,14 @@ CustomTaintChecker::TaintPropagationRule::process(const CallExpr *CE,
         QualType PType = ArgTy->getPointeeType();
         if ((!PType.isNull() && !PType.isConstQualified()) ||
             (ArgTy->isReferenceType() && !Arg->getType().isConstQualified()))
-          State = State->add<TaintArgsOnPostVisit>(i);
+          TI.addArgument(i);
       }
       continue;
     }
 
     // Should mark the return value?
     if (ArgNum == ReturnValueIndex) {
-      State = State->add<TaintArgsOnPostVisit>(ReturnValueIndex);
+      TI.addArgument(ReturnValueIndex);
       continue;
     }
 
@@ -907,9 +955,10 @@ CustomTaintChecker::TaintPropagationRule::process(const CallExpr *CE,
     if (ArgNum >= CE->getNumArgs())
       break;
     // Mark the given argument.
-    State = State->add<TaintArgsOnPostVisit>(ArgNum);
+    TI.addArgument(ArgNum);
   }
-
+  if (!TI.empty())
+    State = State->add<TaintArgsOnPostVisit>(TI);
   return State;
 }
 
@@ -919,16 +968,20 @@ ProgramStateRef CustomTaintChecker::preFscanf(const CallExpr *CE,
                                               CheckerContext &C) const {
   assert(CE->getNumArgs() >= 2);
   ProgramStateRef State = C.getState();
-
+  
   // Check is the file descriptor is tainted.
   if (State->isTainted(CE->getArg(0), C.getLocationContext()) ||
       isStdin(CE->getArg(0), C)) {
+    // Getting invocation name.
+    const FunctionDecl *FDecl = C.getCalleeDecl(CE);
+    StringRef Name = C.getCalleeName(FDecl);
     // All arguments except for the first two should get taint.
-    for (unsigned int i = 2; i < CE->getNumArgs(); ++i)
-      State = State->add<TaintArgsOnPostVisit>(i);
-    return State;
+    TaintInfo TI = TaintInfo(Name, TaintInfo::Operation::TAINT);
+    for (unsigned int i = 2; i < CE->getNumArgs(); ++i){
+      TI.addArgument(i);
+    }
+    return State->add<TaintArgsOnPostVisit>(TI);
   }
-
   return nullptr;
 }
 
@@ -1096,49 +1149,110 @@ bool CustomTaintChecker::generateReportIfTainted(const Expr *E,
   return EmitReportTaintedOnDestination(E, WarningMsg.data(), C, Sym);
 }
 
-bool CustomTaintChecker::isSourceMethod(StringRef Name) const {
-  if (NAME_ARGS_PAIR *Pair = getSourceMethodPair(Name)) {
-    delete Pair;
+void CustomTaintChecker::setConfiguration(TaintParser TP) const {
+  SourceList = TP.getSourceList();
+  PropagationRuleList = TP.getPropagationRuleList();
+  DestinationList = TP.getDestinationList();
+  FilterList = TP.getFilterList();
+}
+
+bool CustomTaintChecker::isSourceExpression(StringRef Name,
+                                            StringRef CalleeType) const {
+  if (Source *Source = getSourceExpression(Name, CalleeType)) {
+    delete Source;
     return true;
   }
   return false;
 }
 
-bool CustomTaintChecker::isArgumentOnSourceConf(StringRef Name,
-                                                int ArgNum) const {
-  bool Found = false;
-  if (NAME_ARGS_PAIR *MethodPair = getSourceMethodPair(Name)) {
-    for (auto I = MethodPair->second.begin(), E = MethodPair->second.end();
-         I != E; ++I) {
-      int ArgumentNum = *I;
-      if (ArgNum == ArgumentNum) {
-        Found = true;
-        break;
-      }
-    }
-    delete MethodPair; // is this correct?
-  }
-  return Found;
-}
-
-NAME_ARGS_PAIR *CustomTaintChecker::getSourceMethodPair(StringRef Name) const {
-  for (SOURCE_MAP::const_iterator I = SourceMap.begin(), E = SourceMap.end();
+Source *CustomTaintChecker::getSourceExpression(StringRef Name,
+                                                StringRef CalleeType) const {
+  for (SourceList::const_iterator I = SourceList.begin(), E = SourceList.end();
        I != E; ++I) {
-    NAME_ARGS_PAIR pair = *I;
-    if (Name.equals(pair.first))
-      return new NAME_ARGS_PAIR(pair.first, pair.second);
+    Source Source = *I;
+    if (Name.equals_lower(Source.getName()) &&
+        (CalleeType.equals_lower(Source.getCalleeType()) ||
+         StringRef(Source.getCalleeType()).equals_lower(CALLEETYPEALL))) {
+      return new class Source(Source.getName(), Source.getCalleeType(),
+                              Source.getArgs());
+    }
   }
   return nullptr;
 }
 
-NAME_ARGS_PAIR *
-CustomTaintChecker::getDestinationMethodPair(StringRef Name) const {
-  for (DESTINATION_MAP::const_iterator I = DestinationMap.begin(),
-                                       E = DestinationMap.end();
+CustomTaintChecker::TaintPropagationRule
+CustomTaintChecker::getPropagatorExpression(StringRef Name,
+                                            StringRef CalleeType) const {
+  TaintPropagationRule taintPropagationRule = TaintPropagationRule();
+  for (PropagationList::const_iterator I = PropagationRuleList.begin(),
+                                       E = PropagationRuleList.end();
        I != E; ++I) {
-    NAME_ARGS_PAIR pair = *I;
-    if (Name.equals(pair.first))
-      return new NAME_ARGS_PAIR(pair.first, pair.second);
+    Propagator Propagator = *I;
+    if (Name.equals_lower(Propagator.getName()) &&
+        (CalleeType.equals_lower(Propagator.getCalleeType()) ||
+         StringRef(Propagator.getCalleeType()).equals_lower(CALLEETYPEALL))) {
+      taintPropagationRule.setSrcArg(Propagator.getSourceArgs());
+      taintPropagationRule.setDstArg(Propagator.getDestArgs());
+      return taintPropagationRule;
+    }
+  }
+  return taintPropagationRule;
+}
+
+Sink *CustomTaintChecker::getDestinationExpression(StringRef Name,
+                                                   StringRef CalleeType) const {
+  for (DestinationList::const_iterator I = DestinationList.begin(),
+                                       E = DestinationList.end();
+       I != E; ++I) {
+    Sink Sink = *I;
+    if (Name.equals_lower(Sink.getName()) &&
+        (CalleeType.equals_lower(Sink.getCalleeType()) ||
+         StringRef(Sink.getCalleeType()).equals_lower(CALLEETYPEALL))) {
+      return new class Sink(Sink.getName(), Sink.getCalleeType(),
+                            Sink.getArgs());
+    }
+  }
+  return nullptr;
+}
+
+Filter *CustomTaintChecker::getFilterExpression(StringRef Name,
+                                                StringRef CalleeType) const {
+  for (FilterList::const_iterator I = FilterList.begin(), E = FilterList.end();
+       I != E; ++I) {
+    Filter Filter = *I;
+    if (Name.equals_lower(Filter.getName()) &&
+        (CalleeType.equals_lower(Filter.getCalleeType()) ||
+         StringRef(Filter.getCalleeType()).equals_lower(CALLEETYPEALL))) {
+      return new class Filter(Filter.getName(), Filter.getCalleeType(),
+                              Filter.getArgs());
+    }
+  }
+  return nullptr;
+}
+
+TaintInfo *CustomTaintChecker::getTaintInfo(ProgramStateRef State,
+                                           std::string Name,
+                                           enum TaintInfo::Operation Op) const {
+  TaintArgsOnPostVisitTy TaintInfoSet = State->get<TaintArgsOnPostVisit>();
+  for (llvm::ImmutableSet<TaintInfo>::iterator I = TaintInfoSet.begin(),
+                                               E = TaintInfoSet.end();
+       I != E; ++I) {
+    TaintInfo TI = *I;
+    if (TI.getName() == Name && TI.getOperation() == Op)
+      return new TaintInfo(TI.getName(), TI.getOperation(), TI.getArguments());
+  }
+  return nullptr;
+}
+
+CallInfo *CustomTaintChecker::getCallInfo(ProgramStateRef State,
+                                          std::string Name) const {
+  UpperCallInfoTy CallInfoSet = State->get<UpperCallInfo>();
+  for (llvm::ImmutableSet<CallInfo>::iterator I = CallInfoSet.begin(),
+                                              E = CallInfoSet.end();
+       I != E; ++I) {
+    CallInfo CI = *I;
+    if (CI.Name == Name)
+      return new CallInfo(CallInfo(CI.Name, CI.CalleeType));
   }
   return nullptr;
 }

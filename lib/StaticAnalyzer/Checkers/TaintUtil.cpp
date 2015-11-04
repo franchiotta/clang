@@ -19,8 +19,11 @@ namespace taintutil {
 bool isFDApplicable(const FunctionDecl *FD) {
   if (!FD)
     return false;
-  if (FD->getKind() == Decl::Function || FD->getKind() == Decl::CXXMethod)
+  if (FD->getKind() == Decl::Function || FD->getKind() == Decl::CXXMethod ||
+      FD->getKind() == Decl::CXXConstructor ||
+      FD->getKind() == Decl::CXXDestructor) {
     return true;
+  }
   return false;
 }
 
@@ -104,6 +107,23 @@ std::string replaceMessage(const char *MsgTemplate, const char *MsgToComplete) {
   char ReplacedMsg[300];
   sprintf(ReplacedMsg, MsgTemplate, MsgToComplete);
   return std::string(ReplacedMsg);
+}
+
+std::string getCallExpCalleeType(const CallExpr *CE, CheckerContext &C) {
+  if (const CXXMemberCallExpr *MemberCallExpr =
+          dyn_cast<CXXMemberCallExpr>(CE)) {
+    const CXXMethodDecl *MD = MemberCallExpr->getMethodDecl();
+    QualType Type = MD->getThisType(C.getASTContext()).getCanonicalType();
+
+    PrintingPolicy MyPP = PrintingPolicy(C.getLangOpts());
+    // As this is a pointer to the object, we have to remove the '*' in the
+    // type.
+    std::string CalleeType =
+        Type.getAsString(MyPP).substr(0, Type.getAsString(MyPP).length() - 2);
+    return CalleeType;
+  } else {
+    return std::string("void");
+  }
 }
 
 PathDiagnosticPiece *TaintBugVisitor::VisitNode(const ExplodedNode *N,

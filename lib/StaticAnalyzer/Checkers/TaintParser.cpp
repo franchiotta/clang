@@ -8,8 +8,7 @@
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// This file contains the declaration of the Instruction class, which is the
-/// base class for all of the VM instructions.
+/// Implementation of TaintParser class.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -25,12 +24,10 @@ namespace taintutil {
 TaintParser::TaintParser(std::string XMLfilename, std::string XSDfilename) {
   this->XMLfilename = XMLfilename;
   this->XSDfilename = XSDfilename;
-  this->sourceMap =
-      SmallVector<std::pair<std::string, SmallVector<int, SIZE_ARGS>>,
-                  SIZE_METHODS>();
-  this->propagationRuleMap = PROPAGATION_MAP();
-  this->destinationMap = DESTINATION_MAP();
-  this->filterMap = FILTER_MAP();
+  this->sourceList = SourceList();
+  this->propagationRuleList = PropagationList();
+  this->destinationList = DestinationList();
+  this->filterList = FilterList();
 }
 TaintParser::~TaintParser() {}
 
@@ -89,7 +86,6 @@ bool TaintParser::executeXpathExpression(xmlDocPtr doc,
   // Create xpath evaluation context.
   xpathCtx = xmlXPathNewContext(doc);
   if (xpathCtx == NULL) {
-    // debug("Error: unable to create new XPath context\n");
     xmlFreeDoc(doc);
     return false;
   }
@@ -97,7 +93,6 @@ bool TaintParser::executeXpathExpression(xmlDocPtr doc,
   // Evaluate xpath expression.
   xpathObj = xmlXPathEvalExpression(xpathExpr, xpathCtx);
   if (xpathObj == NULL) {
-    // debug("Error: unable to evaluate xpath expression << xpathExpr \n");
     xmlXPathFreeContext(xpathCtx);
     xmlFreeDoc(doc);
     return false;
@@ -121,21 +116,26 @@ void TaintParser::parseSources(xmlNodeSetPtr nodes) {
 
     if (nodes->nodeTab[i]->type == XML_ELEMENT_NODE) {
       cur = nodes->nodeTab[i];
-      std::string generateMethod;
-      SmallVector<int, SIZE_ARGS> generateArgs;
+      Source source = Source();
+      source.setCalleeType("all");
 
       xmlNodePtr node = cur->children;
       while (node != cur->last) {
         if (xmlStrEqual(node->name, xmlCharStrdup("method"))) {
-          generateMethod =
+          std::string generateMethod =
               std::string(reinterpret_cast<char *>(node->children->content));
+          source.setName(generateMethod);
+        }
+        if (xmlStrEqual(node->name, xmlCharStrdup("calleetype"))) {
+          std::string calleeType =
+          std::string(reinterpret_cast<char *>(node->children->content));
+          source.setCalleeType(calleeType);
         }
         if (xmlStrEqual(node->name, xmlCharStrdup("params"))) {
-          generateArgs = SmallVector<int, SIZE_ARGS>();
           xmlNodePtr paramsNodes = node->children;
           while (paramsNodes != node->last) {
             if (xmlStrEqual(paramsNodes->name, xmlCharStrdup("value"))) {
-              generateArgs.push_back(std::stoi(
+              source.addArgument(std::stoi(
                   reinterpret_cast<char *>(paramsNodes->children->content)));
             }
             paramsNodes = paramsNodes->next;
@@ -143,8 +143,7 @@ void TaintParser::parseSources(xmlNodeSetPtr nodes) {
         }
         node = node->next;
       }
-      sourceMap.push_back(std::pair<std::string, SmallVector<int, SIZE_ARGS>>(
-          generateMethod, generateArgs));
+      sourceList.push_back(source);
     } else {
       cur = nodes->nodeTab[i];
     }
@@ -161,20 +160,26 @@ void TaintParser::parsePropagationRules(xmlNodeSetPtr nodes) {
 
     if (nodes->nodeTab[i]->type == XML_ELEMENT_NODE) {
       cur = nodes->nodeTab[i];
-      std::string propagateMethod;
-      PropagationRule pr = PropagationRule();
+      Propagator propagator = Propagator();
+      propagator.setCalleeType("all");
 
       xmlNodePtr node = cur->children;
       while (node != cur->last) {
         if (xmlStrEqual(node->name, xmlCharStrdup("method"))) {
-          propagateMethod =
+          std::string propagateMethod =
               std::string(reinterpret_cast<char *>(node->children->content));
+          propagator.setName(propagateMethod);
+        }
+        if (xmlStrEqual(node->name, xmlCharStrdup("calleetype"))) {
+          std::string calleeType =
+          std::string(reinterpret_cast<char *>(node->children->content));
+          propagator.setCalleeType(calleeType);
         }
         if (xmlStrEqual(node->name, xmlCharStrdup("sources"))) {
           xmlNodePtr paramsNodes = node->children;
           while (paramsNodes != node->last) {
             if (xmlStrEqual(paramsNodes->name, xmlCharStrdup("value"))) {
-              pr.addSrcArg(std::stoi(
+              propagator.addSourceArg(std::stoi(
                   reinterpret_cast<char *>(paramsNodes->children->content)));
             }
             paramsNodes = paramsNodes->next;
@@ -184,7 +189,7 @@ void TaintParser::parsePropagationRules(xmlNodeSetPtr nodes) {
           xmlNodePtr paramsNodes = node->children;
           while (paramsNodes != node->last) {
             if (xmlStrEqual(paramsNodes->name, xmlCharStrdup("value"))) {
-              pr.addDstArg(std::stoi(
+              propagator.addDestArg(std::stoi(
                   reinterpret_cast<char *>(paramsNodes->children->content)));
             }
             paramsNodes = paramsNodes->next;
@@ -192,8 +197,7 @@ void TaintParser::parsePropagationRules(xmlNodeSetPtr nodes) {
         }
         node = node->next;
       }
-      propagationRuleMap.push_back(
-          std::pair<std::string, PropagationRule>(propagateMethod, pr));
+      propagationRuleList.push_back(propagator);
     } else {
       cur = nodes->nodeTab[i];
     }
@@ -210,21 +214,26 @@ void TaintParser::parseDestinations(xmlNodeSetPtr nodes) {
 
     if (nodes->nodeTab[i]->type == XML_ELEMENT_NODE) {
       cur = nodes->nodeTab[i];
-      std::string destinationMethod;
-      SmallVector<int, SIZE_ARGS> destinationArgs;
+      Sink sink = Sink();
+      sink.setCalleeType("all");
 
       xmlNodePtr node = cur->children;
       while (node != cur->last) {
         if (xmlStrEqual(node->name, xmlCharStrdup("method"))) {
-          destinationMethod =
+          std::string destinationMethod =
               std::string(reinterpret_cast<char *>(node->children->content));
+          sink.setName(destinationMethod);
+        }
+        if (xmlStrEqual(node->name, xmlCharStrdup("calleetype"))) {
+          std::string calleeType =
+          std::string(reinterpret_cast<char *>(node->children->content));
+          sink.setCalleeType(calleeType);
         }
         if (xmlStrEqual(node->name, xmlCharStrdup("params"))) {
-          destinationArgs = SmallVector<int, SIZE_ARGS>();
           xmlNodePtr paramsNodes = node->children;
           while (paramsNodes != node->last) {
             if (xmlStrEqual(paramsNodes->name, xmlCharStrdup("value"))) {
-              destinationArgs.push_back(std::stoi(
+              sink.addArgument(std::stoi(
                   reinterpret_cast<char *>(paramsNodes->children->content)));
             }
             paramsNodes = paramsNodes->next;
@@ -232,9 +241,7 @@ void TaintParser::parseDestinations(xmlNodeSetPtr nodes) {
         }
         node = node->next;
       }
-      destinationMap.push_back(
-          std::pair<std::string, SmallVector<int, SIZE_ARGS>>(destinationMethod,
-                                                              destinationArgs));
+      destinationList.push_back(sink);
     } else {
       cur = nodes->nodeTab[i];
     }
@@ -251,20 +258,26 @@ void TaintParser::parseFilters(xmlNodeSetPtr nodes) {
 
     if (nodes->nodeTab[i]->type == XML_ELEMENT_NODE) {
       cur = nodes->nodeTab[i];
-      std::string filterMethod;
-      SmallVector<int, SIZE_ARGS> filterArgs;
+      Filter filter = Filter();
+      filter.setCalleeType("all");
 
       xmlNodePtr node = cur->children;
       while (node != cur->last) {
         if (xmlStrEqual(node->name, xmlCharStrdup("method"))) {
-          filterMethod =
+          std::string filterMethod =
               std::string(reinterpret_cast<char *>(node->children->content));
+          filter.setName(filterMethod);
+        }
+        if (xmlStrEqual(node->name, xmlCharStrdup("calleetype"))) {
+          std::string calleeType =
+          std::string(reinterpret_cast<char *>(node->children->content));
+          filter.setCalleeType(calleeType);
         }
         if (xmlStrEqual(node->name, xmlCharStrdup("params"))) {
           xmlNodePtr paramsNodes = node->children;
           while (paramsNodes != node->last) {
             if (xmlStrEqual(paramsNodes->name, xmlCharStrdup("value"))) {
-              filterArgs.push_back(std::stoi(
+              filter.addArgument(std::stoi(
                   reinterpret_cast<char *>(paramsNodes->children->content)));
             }
             paramsNodes = paramsNodes->next;
@@ -272,8 +285,7 @@ void TaintParser::parseFilters(xmlNodeSetPtr nodes) {
         }
         node = node->next;
       }
-      filterMap.push_back(std::pair<std::string, SmallVector<int, SIZE_ARGS>>(
-          filterMethod, filterArgs));
+      filterList.push_back(filter);
     } else {
       cur = nodes->nodeTab[i];
     }
@@ -295,90 +307,55 @@ bool TaintParser::validateXMLAgaintSchema(xmlDocPtr doc) {
 
     validCtxt = xmlSchemaNewValidCtxt(schema);
     int ret = xmlSchemaValidateDoc(validCtxt, doc);
-
     if (ret == 0) {
-      // debug("Configuration file validates against schema\n");
       return true;
     } else {
-      // debug("Configuration file doesn't validate against schema\n");
       return false;
     }
   }
   return false;
 }
 
-SOURCE_MAP TaintParser::getSourceMap() { return sourceMap; }
+SourceList TaintParser::getSourceList() { return sourceList; }
 
-TaintParser::PROPAGATION_MAP TaintParser::getPropagationRuleMap() {
-  return propagationRuleMap;
+PropagationList TaintParser::getPropagationRuleList() {
+  return propagationRuleList;
 }
 
-DESTINATION_MAP TaintParser::getDestinationMap() { return destinationMap; }
+DestinationList TaintParser::getDestinationList() { return destinationList; }
 
-FILTER_MAP TaintParser::getFilterMap() { return filterMap; }
+FilterList TaintParser::getFilterList() { return filterList; }
 
 std::string TaintParser::toString() {
   std::string str = "Paser {\n";
   str = str + "Sources :\n";
-  for (SOURCE_MAP::const_iterator I = sourceMap.begin(), E = sourceMap.end();
+  for (SourceList::const_iterator I = sourceList.begin(), E = sourceList.end();
        I != E; ++I) {
-    std::pair<StringRef, SmallVector<int, SIZE_ARGS>> pair = *I;
-    str = str + " - Name: " + pair.first.data() + "\n";
-    for (SmallVector<int, SIZE_ARGS>::const_iterator J = pair.second.begin(),
-                                                     Y = pair.second.end();
-         J != Y; ++J) {
-      int arg = *J;
-      str = str + "   >> Arg " + std::to_string(arg) + "\n";
-    }
+    Source source = *I;
+    str += " - " + source.toString() + "\n";
   }
 
-  str = str + "Propagation: \n";
-  for (PROPAGATION_MAP::const_iterator I = propagationRuleMap.begin(),
-                                       E = propagationRuleMap.end();
+  str = str + "Propagators: \n";
+  for (PropagationList::const_iterator I = propagationRuleList.begin(),
+                                        E = propagationRuleList.end();
        I != E; ++I) {
-    std::pair<std::string, PropagationRule> pair = *I;
-    str = str + " - Name: " + pair.first.data() + "\n";
-    str = str + "   - Sources\n";
-    for (ArgVector::const_iterator J = pair.second.SrcArgs.begin(),
-                                   Y = pair.second.SrcArgs.end();
-         J != Y; ++J) {
-      int arg = *J;
-      str = str + "     >> Arg " + std::to_string(arg) + "\n";
-    }
-    str = str + "   - Destinations\n";
-    for (ArgVector::const_iterator J = pair.second.DstArgs.begin(),
-                                   Y = pair.second.DstArgs.end();
-         J != Y; ++J) {
-      int arg = *J;
-      str = str + "     >> Arg " + std::to_string(arg) + "\n";
-    }
+    Propagator propagator = *I;
+    str += " - " + propagator.toString() + "\n";
   }
 
-  str = str + "Destinations: \n";
-  for (DESTINATION_MAP::const_iterator I = destinationMap.begin(),
-                                       E = destinationMap.end();
+  str = str + "Sinks: \n";
+  for (DestinationList::const_iterator I = destinationList.begin(),
+                                        E = destinationList.end();
        I != E; ++I) {
-    std::pair<StringRef, SmallVector<int, SIZE_ARGS>> pair = *I;
-    str = str + " - Name: " + pair.first.data() + "\n";
-    for (SmallVector<int, SIZE_ARGS>::const_iterator J = pair.second.begin(),
-                                                     Y = pair.second.end();
-         J != Y; ++J) {
-      int arg = *J;
-      str = str + "   >> Arg " + std::to_string(arg) + "\n";
-    }
+    Sink sink = *I;
+    str += " - " + sink.toString() + "\n";
   }
 
   str = str + "Filters:\n";
-  for (FILTER_MAP::const_iterator I = filterMap.begin(), E = filterMap.end();
+  for (FilterList::const_iterator I = filterList.begin(), E = filterList.end();
        I != E; ++I) {
-    std::pair<StringRef, SmallVector<int, SIZE_ARGS>> pair = *I;
-    str = str + " - Name: " + pair.first.data() + "\n";
-    for (SmallVector<int, SIZE_ARGS>::const_iterator J = pair.second.begin(),
-                                                     Y = pair.second.end();
-         J != Y; ++J) {
-      int arg = *J;
-      str = str + "   >> Arg " + std::to_string(arg) + "\n";
-    }
+    Filter filter = *I;
+    str += " - " + filter.toString() + "\n";
   }
   str = str + "}\n";
   return str;

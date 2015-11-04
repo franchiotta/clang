@@ -25,6 +25,7 @@ add_clang_library(clangStaticAnalyzerCheckers
   CloneChecker.cpp
   CXXSelfAssignmentChecker.cpp
   CustomTaintChecker.cpp
+  TaintExpression.cpp
   TaintParser.cpp
   TaintVisitor.cpp
   TaintUtil.cpp

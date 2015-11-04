@@ -23,6 +23,7 @@
         <xs:complexType>
             <xs:sequence>
                 <xs:element type="xs:string" name="method"/>
+                <xs:element type="xs:string" name="calleetype" minOccurs="0"/>
                 <xs:element name="params">
                     <xs:complexType>
                         <xs:sequence>
@@ -44,6 +45,7 @@
         <xs:complexType>
             <xs:sequence>
                 <xs:element type="xs:string" name="method"/>
+                <xs:element type="xs:string" name="calleetype" minOccurs="0"/>
                 <xs:element name="sources">
                     <xs:complexType>
                         <xs:sequence>
@@ -72,6 +74,7 @@
         <xs:complexType>
             <xs:sequence>
                 <xs:element type="xs:string" name="method"/>
+                <xs:element type="xs:string" name="calleetype" minOccurs="0"/>
                 <xs:element name="params">
                     <xs:complexType>
                         <xs:sequence>
@@ -93,6 +96,7 @@
         <xs:complexType>
             <xs:sequence>
                 <xs:element type="xs:string" name="method"/>
+                <xs:element type="xs:string" name="calleetype" minOccurs="0"/>
                 <xs:element name="params">
                     <xs:complexType>
                         <xs:sequence>
